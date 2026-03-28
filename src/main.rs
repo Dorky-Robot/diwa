@@ -1,8 +1,10 @@
+mod browse;
 mod db;
 mod embed;
 mod extract;
 mod git;
 mod github;
+mod reflect;
 mod repo;
 
 use anyhow::Result;
@@ -71,6 +73,13 @@ pub enum Commands {
         dir: PathBuf,
     },
 
+    /// Browse insights in a scrollable TUI
+    Browse {
+        /// Target directory (default: current dir)
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+    },
+
     /// Show index stats
     Stats {
         /// Target directory (default: current dir)
@@ -105,6 +114,7 @@ fn run(cli: Cli) -> Result<()> {
             n,
             dir,
         } => run_search(&dir, &query, n, json),
+        Commands::Browse { dir } => run_browse(&dir),
         Commands::Stats { dir } => run_stats(&dir),
     }
 }
@@ -210,10 +220,44 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
     }
 
     println!(
-        "\nDone. {} insights indexed for {} (total: {}).",
+        "\n{} insights indexed for {}.",
         total_insights,
         resolved.full_name,
+    );
+
+    // Reflection pass: generate deeper cross-cutting insights.
+    let all_insights = db.list_all()?;
+    if all_insights.len() >= 3 {
+        println!("Reflecting on {} insights...", all_insights.len());
+        let reflections = reflect::generate_reflections(
+            &all_insights,
+            &resolved.full_name,
+            &resolved.local_path,
+            "the indexed history",
+        );
+
+        if !reflections.is_empty() {
+            let texts: Vec<String> = reflections.iter().map(|r| r.embedding_text()).collect();
+            match embed::embed_batch(&texts) {
+                Ok(embeddings) => {
+                    db.insert_insights_with_embeddings(&reflections, Some(&embeddings))?;
+                }
+                Err(_) => {
+                    db.insert_insights(&reflections)?;
+                }
+            }
+
+            println!("{} reflections added:", reflections.len());
+            for r in &reflections {
+                println!("  - {}", r.title);
+            }
+        }
+    }
+
+    println!(
+        "\nTotal: {} insights for {}.",
         db.count()?,
+        resolved.full_name,
     );
 
     Ok(())
@@ -270,6 +314,17 @@ fn run_search(dir: &Path, query: &str, limit: usize, json_output: bool) -> Resul
     }
 
     Ok(())
+}
+
+fn run_browse(dir: &Path) -> Result<()> {
+    let diwa = diwa_dir();
+    let resolved = repo::resolve_repo(dir)?;
+    let slug = format!("{}--{}", resolved.owner, resolved.name);
+
+    let db = db::IndexDb::open(&diwa, &slug)?;
+    let insights = db.list_all()?;
+
+    browse::run_browse(insights, &resolved.full_name)
 }
 
 fn run_stats(dir: &Path) -> Result<()> {

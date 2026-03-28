@@ -344,6 +344,39 @@ impl IndexDb {
             .collect())
     }
 
+    /// List all insights, ordered by commit date descending.
+    pub fn list_all(&self) -> Result<Vec<SearchResult>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, commit_sha, commit_date, category, title, body,
+                    files, tags, source_type, pr_number
+             FROM insights
+             ORDER BY commit_date DESC",
+        )?;
+
+        let results = stmt
+            .query_map([], |row| {
+                let files_str: String = row.get(6)?;
+                let files: Vec<String> = serde_json::from_str(&files_str).unwrap_or_default();
+                Ok(SearchResult {
+                    id: row.get(0)?,
+                    commit_sha: row.get(1)?,
+                    commit_date: row.get(2)?,
+                    category: row.get(3)?,
+                    title: row.get(4)?,
+                    body: row.get(5)?,
+                    files,
+                    tags: row.get(7)?,
+                    source_type: row.get(8)?,
+                    pr_number: row.get(9)?,
+                    rank: 0.0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .context("failed to list insights")?;
+
+        Ok(results)
+    }
+
     pub fn last_indexed_sha(&self) -> Result<Option<String>> {
         let result = self.conn.query_row(
             "SELECT value FROM meta WHERE key = 'last_indexed_sha'",

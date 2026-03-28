@@ -15,4 +15,6 @@ clap = { version = "4", features = ["derive"] }
 fastembed = "5.13"
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
+crossterm = "0.28"
+ratatui = "0.29"
 serde_json = "1"
