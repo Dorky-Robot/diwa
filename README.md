@@ -9,7 +9,7 @@ It replaces ADRs, changelogs, and tribal knowledge with something that actually 
 ## Quick start
 
 ```bash
-brew tap Dorky-Robot/diwa && brew install diwa
+brew tap Dorky-Robot/tap && brew install diwa
 
 cd your-repo
 diwa init
@@ -134,7 +134,7 @@ Categories: `decision`, `pattern`, `learning`, `architecture`, `migration`, `bug
 ### Homebrew (macOS)
 
 ```bash
-brew tap Dorky-Robot/diwa && brew install diwa
+brew tap Dorky-Robot/tap && brew install diwa
 ```
 
 ### Install script (Linux/macOS)
