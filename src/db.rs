@@ -573,4 +573,120 @@ mod tests {
         assert_eq!(sanitize_fts_query("pull-based"), "\"pull-based\"");
         assert_eq!(sanitize_fts_query(""), "");
     }
+
+    #[test]
+    fn test_list_all() {
+        let db = IndexDb::open_memory().unwrap();
+        db.insert_insights(&[sample_insight()]).unwrap();
+        let all = db.list_all().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].title, "Switched to pull-based terminal rendering");
+    }
+
+    #[test]
+    fn test_list_all_empty() {
+        let db = IndexDb::open_memory().unwrap();
+        let all = db.list_all().unwrap();
+        assert!(all.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_inserts() {
+        let db = IndexDb::open_memory().unwrap();
+        let mut a = sample_insight();
+        a.commit_sha = "aaa".into();
+        a.title = "First insight".into();
+        let mut b = sample_insight();
+        b.commit_sha = "bbb".into();
+        b.title = "Second insight".into();
+
+        db.insert_insights(&[a]).unwrap();
+        db.insert_insights(&[b]).unwrap();
+        assert_eq!(db.count().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_search_respects_limit() {
+        let db = IndexDb::open_memory().unwrap();
+        for i in 0..10 {
+            let mut insight = sample_insight();
+            insight.commit_sha = format!("sha{i}");
+            insight.title = format!("Rendering insight number {i}");
+            db.insert_insights(&[insight]).unwrap();
+        }
+        let results = db.search("rendering", 3).unwrap();
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_count_with_embeddings_mixed() {
+        let db = IndexDb::open_memory().unwrap();
+        // One with embedding, one without.
+        let mut a = sample_insight();
+        a.commit_sha = "aaa".into();
+        db.insert_insights_with_embeddings(&[a], Some(&[vec![0.1, 0.2, 0.3]]))
+            .unwrap();
+
+        let mut b = sample_insight();
+        b.commit_sha = "bbb".into();
+        db.insert_insights(&[b]).unwrap();
+
+        assert_eq!(db.count().unwrap(), 2);
+        assert_eq!(db.count_with_embeddings().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_hybrid_search_with_embeddings() {
+        let db = IndexDb::open_memory().unwrap();
+        let insight = sample_insight();
+        let emb = vec![0.5f32, 0.3, 0.1, 0.8];
+        db.insert_insights_with_embeddings(&[insight], Some(&[emb]))
+            .unwrap();
+
+        let query_emb = vec![0.5f32, 0.3, 0.1, 0.7];
+        let results = db
+            .search_hybrid("pull-based rendering", Some(&query_emb), 10)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        // Hybrid score should be > 0 (combined FTS + semantic).
+        assert!(results[0].rank > 0.0);
+    }
+
+    #[test]
+    fn test_semantic_search_empty_db() {
+        let db = IndexDb::open_memory().unwrap();
+        let results = db.search_semantic(&[0.1, 0.2], 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_reset_clears_meta() {
+        let db = IndexDb::open_memory().unwrap();
+        db.set_last_indexed_sha("abc").unwrap();
+        assert!(db.last_indexed_sha().unwrap().is_some());
+        db.reset().unwrap();
+        assert!(db.last_indexed_sha().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_embedding_text() {
+        let insight = sample_insight();
+        let text = insight.embedding_text();
+        assert!(text.contains("pull-based"));
+        assert!(text.contains("garbled text"));
+        assert!(text.contains("rendering"));
+    }
+
+    #[test]
+    fn test_open_on_disk() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = IndexDb::open(tmp.path(), "test--repo").unwrap();
+        db.insert_insights(&[sample_insight()]).unwrap();
+        assert_eq!(db.count().unwrap(), 1);
+
+        // Reopen and verify persistence.
+        drop(db);
+        let db2 = IndexDb::open(tmp.path(), "test--repo").unwrap();
+        assert_eq!(db2.count().unwrap(), 1);
+    }
 }

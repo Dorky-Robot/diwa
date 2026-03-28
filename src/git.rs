@@ -255,4 +255,65 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].sha, "a");
     }
+
+    fn make_commit(sha: &str, msg: &str) -> CommitData {
+        CommitData {
+            sha: sha.into(),
+            message: msg.into(),
+            diff: String::new(),
+            date: String::new(),
+            author: String::new(),
+            files: Vec::new(),
+            pr_title: None,
+            pr_body: None,
+            review_comments: None,
+        }
+    }
+
+    #[test]
+    fn test_filter_noise_merge_commits() {
+        let commits = vec![
+            make_commit("a", "feat: something"),
+            make_commit("b", "Merge pull request #42 from owner/branch"),
+            make_commit("c", "Merge branch 'main' into feature"),
+        ];
+        let filtered = filter_noise(commits);
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_noise_keeps_fixes_and_refactors() {
+        let commits = vec![
+            make_commit("a", "fix: resolve race condition"),
+            make_commit("b", "refactor: simplify state machine"),
+            make_commit("c", "chore: bump version to 0.5.0"),
+        ];
+        let filtered = filter_noise(commits);
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].sha, "a");
+        assert_eq!(filtered[1].sha, "b");
+    }
+
+    #[test]
+    fn test_batch_empty() {
+        let batches = batch_commits(vec![], 5);
+        assert!(batches.is_empty());
+    }
+
+    #[test]
+    fn test_batch_single() {
+        let commits = vec![make_commit("a", "one")];
+        let batches = batch_commits(commits, 5);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].len(), 1);
+    }
+
+    #[test]
+    fn test_batch_exact_fit() {
+        let commits: Vec<_> = (0..10).map(|i| make_commit(&format!("{i}"), "msg")).collect();
+        let batches = batch_commits(commits, 5);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].len(), 5);
+        assert_eq!(batches[1].len(), 5);
+    }
 }
