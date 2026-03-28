@@ -1,0 +1,18 @@
+[package]
+name = "diwa"
+version = "0.1.0"
+edition = "2021"
+description = "Semantic git history index — extract the deeper meaning from your codebase"
+
+[[bin]]
+name = "diwa"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+clap = { version = "4", features = ["derive"] }
+fastembed = "5.13"
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
