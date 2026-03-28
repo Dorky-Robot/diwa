@@ -1,0 +1,132 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../diwa-${{ matrix.target }}.tar.gz diwa
+      - uses: actions/upload-artifact@v7
+        with:
+          name: diwa-${{ matrix.target }}
+          path: diwa-${{ matrix.target }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create ${{ github.ref_name }} \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            diwa-*.tar.gz
+
+  update-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Compute SHA256 sums
+        run: |
+          for f in diwa-*.tar.gz; do
+            target=$(echo "$f" | sed 's/diwa-//' | sed 's/\.tar\.gz//' | tr '-' '_')
+            sha=$(sha256sum "$f" | cut -d' ' -f1)
+            echo "SHA_${target}=${sha}" >> "$GITHUB_ENV"
+          done
+
+      - name: Checkout tap repo
+        uses: actions/checkout@v4
+        with:
+          repository: dorky-robot/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update formula
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${GITHUB_REF_NAME}"
+          BASE="https://github.com/Dorky-Robot/diwa/releases/download/${TAG}"
+
+          mkdir -p homebrew-tap/Formula
+          cat > homebrew-tap/Formula/diwa.rb << FORMULA
+          class Diwa < Formula
+            desc "Semantic git history index — the deeper meaning behind your codebase"
+            homepage "https://github.com/Dorky-Robot/diwa"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "${BASE}/diwa-aarch64-apple-darwin.tar.gz"
+                sha256 "${SHA_aarch64_apple_darwin}"
+              end
+
+              on_intel do
+                url "${BASE}/diwa-x86_64-apple-darwin.tar.gz"
+                sha256 "${SHA_x86_64_apple_darwin}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "${BASE}/diwa-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_aarch64_unknown_linux_gnu}"
+              end
+
+              on_intel do
+                url "${BASE}/diwa-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_x86_64_unknown_linux_gnu}"
+              end
+            end
+
+            def install
+              bin.install "diwa"
+            end
+
+            test do
+              assert_match "diwa", shell_output("#{bin}/diwa --help")
+            end
+          end
+          FORMULA
+
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/diwa.rb
+          git commit -m "diwa ${VERSION}"
+          git push

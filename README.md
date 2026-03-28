@@ -72,13 +72,29 @@ diwa search "things they tried that didn't work"
 
 ## How it works
 
+### Indexing
+
 ```
 git log + diffs
   -> Claude reads commits in batches, extracts structured insights
-  -> BGE-small-en-v1.5 generates vector embeddings (in-process, no server)
+  -> BGE-small-en-v1.5 generates 384-dim vector embeddings (in-process, no server)
   -> SQLite stores insights with FTS5 full-text index + embedding vectors
-  -> Hybrid search combines keyword matching (BM25) + cosine similarity
 ```
+
+### Searching: hybrid keyword + semantic
+
+When you search, diwa runs two searches in parallel and merges the results:
+
+**FTS5 keyword search (30% weight)** — SQLite's built-in full-text search with BM25 ranking. Fast, exact. If your query contains words that appear in an insight, this finds them.
+
+**Vector similarity search (70% weight)** — Each insight and your query are converted to 384-dimensional vectors by BGE-small-en-v1.5. Cosine similarity measures how close they are in *meaning space*, not word space.
+
+This is why `"why did they switch programming languages"` finds an insight about `"Full language migration from Go to Rust"` — the words don't overlap at all, but the embedding model learned during training that these concepts (language switching, migration, Go, Rust) live in the same neighborhood of meaning.
+
+The two scores are combined: `0.3 * keyword_score + 0.7 * semantic_score`. This means:
+- Exact keyword matches still rank highly
+- Vague, natural-language queries work through semantic similarity
+- Results that match on both dimensions rank highest
 
 ### Three input layers (automatic)
 
