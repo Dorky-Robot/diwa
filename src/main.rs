@@ -391,26 +391,42 @@ fn run_search(repo_arg: &str, query: &str, limit: usize, json_output: bool, deep
     if json_output {
         println!("{}", serde_json::to_string_pretty(&results)?);
     } else {
+        // Collect unique commits for the index.
+        let mut commit_index: Vec<(String, String, Vec<usize>)> = Vec::new();
+
         for (i, r) in results.iter().enumerate() {
+            let short_sha = r.commit_sha[..7.min(r.commit_sha.len())].to_string();
+
+            // Track which results reference which commits.
+            if let Some(entry) = commit_index.iter_mut().find(|(sha, _, _)| *sha == short_sha) {
+                entry.2.push(i + 1);
+            } else {
+                let date = r.commit_date.split('T').next().unwrap_or(&r.commit_date);
+                commit_index.push((short_sha.clone(), date.to_string(), vec![i + 1]));
+            }
+
             println!(
-                "\x1b[1m{}. [{}] {}\x1b[0m",
+                "\x1b[1m{}. [{}] {}\x1b[0m  \x1b[90m[{}]\x1b[0m",
                 i + 1,
                 r.category,
-                r.title
+                r.title,
+                short_sha,
             );
             println!("   {}", r.body);
-            println!(
-                "   \x1b[90mcommit: {} | {} | {}\x1b[0m",
-                &r.commit_sha[..7.min(r.commit_sha.len())],
-                r.commit_date.split('T').next().unwrap_or(&r.commit_date),
-                r.source_type
-            );
             if !r.tags.is_empty() {
                 println!("   \x1b[90mtags: {}\x1b[0m", r.tags);
             }
             println!();
         }
-        println!("{} results for: {query}", results.len());
+
+        // Commit index footer.
+        println!("\x1b[90m---\x1b[0m");
+        println!("{} results for: {query}\n", results.len());
+        println!("\x1b[90mCommits:\x1b[0m");
+        for (sha, date, refs) in &commit_index {
+            let ref_list: Vec<String> = refs.iter().map(|r| format!("[{r}]")).collect();
+            println!("  \x1b[90m{sha}  {}  cited by {}\x1b[0m", date, ref_list.join(" "));
+        }
     }
 
     Ok(())
