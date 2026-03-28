@@ -174,11 +174,11 @@ diwa search "query" --json        Machine-readable output for agents
 
 ## Requirements
 
-- [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) for insight extraction
-- `git` (obviously)
-- `gh` CLI (optional, for PR/review enrichment)
+- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** (required) — diwa shells out to `claude` for insight extraction and reflections. Claude reads your commits and diffs and does the hard work of understanding *why* code changed, not just *what* changed. This is a frontier-model task — no local model can do it. You need Claude Code installed and authenticated.
+- **git** (obviously)
+- **gh CLI** (optional) — when authenticated, diwa pulls PR titles, descriptions, and review comments for richer insights
 
-The embedding model (BGE-small-en-v1.5, ~33MB) downloads automatically on first use and caches in `~/.diwa/models/`.
+The embedding model (BGE-small-en-v1.5, ~33MB) runs locally in-process via ONNX — no server, no API key. It's only used for turning insight text into vectors for semantic search, not for generating insights. It downloads automatically on first use and caches in `~/.diwa/models/`.
 
 ## Storage
 
