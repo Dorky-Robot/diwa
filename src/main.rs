@@ -1,5 +1,6 @@
 mod browse;
 mod db;
+mod deep_search;
 mod embed;
 mod extract;
 mod git;
@@ -71,6 +72,10 @@ pub enum Commands {
         /// Target directory (default: current dir)
         #[arg(long, default_value = ".")]
         dir: PathBuf,
+
+        /// Deep search: Claude synthesizes an answer from multiple queries
+        #[arg(long, default_value_t = false)]
+        deep: bool,
     },
 
     /// Browse insights in a scrollable TUI
@@ -113,7 +118,8 @@ fn run(cli: Cli) -> Result<()> {
             json,
             n,
             dir,
-        } => run_search(&dir, &query, n, json),
+            deep,
+        } => run_search(&dir, &query, n, json, deep),
         Commands::Browse { dir } => run_browse(&dir),
         Commands::Stats { dir } => run_stats(&dir),
     }
@@ -263,12 +269,19 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
     Ok(())
 }
 
-fn run_search(dir: &Path, query: &str, limit: usize, json_output: bool) -> Result<()> {
+fn run_search(dir: &Path, query: &str, limit: usize, json_output: bool, deep: bool) -> Result<()> {
     let diwa = diwa_dir();
     let resolved = repo::resolve_repo(dir)?;
     let slug = format!("{}--{}", resolved.owner, resolved.name);
 
     let db = db::IndexDb::open(&diwa, &slug)?;
+
+    // Deep search: Claude drives retrieval and synthesizes an answer.
+    if deep {
+        let answer = deep_search::deep_search(&db, query)?;
+        println!("{answer}");
+        return Ok(());
+    }
 
     // Hybrid search: FTS5 keywords + vector similarity.
     let query_embedding = if db.count_with_embeddings()? > 0 {
