@@ -117,11 +117,23 @@ fn find_hooks_dir(repo_path: &Path) -> Result<std::path::PathBuf> {
         let custom = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !custom.is_empty() {
             let custom_path = if Path::new(&custom).is_absolute() {
-                std::path::PathBuf::from(custom)
+                std::path::PathBuf::from(&custom)
             } else {
-                repo_path.join(custom)
+                repo_path.join(&custom)
             };
-            return Ok(custom_path);
+
+            // Verify the path is writable. If core.hooksPath points to a
+            // non-existent or read-only location (e.g. a stale Docker mount
+            // like /work/repo/.husky from a sipag worker), fall back to
+            // .git/hooks instead.
+            if custom_path.exists() || fs::create_dir_all(&custom_path).is_ok() {
+                return Ok(custom_path);
+            }
+
+            eprintln!(
+                "Warning: core.hooksPath '{}' is not writable, using .git/hooks instead",
+                custom
+            );
         }
     }
 

@@ -119,7 +119,14 @@ fn commit_diff(repo_path: &Path, sha: &str) -> Result<String> {
         Ok(o) if o.status.success() => {
             let full = String::from_utf8_lossy(&o.stdout).to_string();
             if full.len() > MAX_DIFF_CHARS {
-                let mut truncated = full[..MAX_DIFF_CHARS].to_string();
+                // Find a valid UTF-8 char boundary near MAX_DIFF_CHARS.
+                let boundary = full
+                    .char_indices()
+                    .take_while(|(i, _)| *i <= MAX_DIFF_CHARS)
+                    .last()
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
+                let mut truncated = full[..boundary].to_string();
                 truncated.push_str("\n... (truncated)");
                 Ok(truncated)
             } else {
