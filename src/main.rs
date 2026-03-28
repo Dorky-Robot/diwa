@@ -2,6 +2,7 @@ mod browse;
 mod db;
 mod deep_search;
 mod embed;
+mod install;
 mod extract;
 mod git;
 mod github;
@@ -84,6 +85,20 @@ pub enum Commands {
         repo: String,
     },
 
+    /// Install diwa into a repo (adds post-commit hook)
+    Init {
+        /// Target directory (default: current dir)
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+    },
+
+    /// Remove diwa from a repo
+    Uninit {
+        /// Target directory (default: current dir)
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+    },
+
     /// Show index stats
     Stats {
         /// Repo name or path (default: current dir)
@@ -119,6 +134,8 @@ fn run(cli: Cli) -> Result<()> {
             n,
             deep,
         } => run_search(&repo, &query, n, json, deep),
+        Commands::Init { dir } => run_init(&dir),
+        Commands::Uninit { dir } => run_uninit(&dir),
         Commands::Browse { repo } => run_browse(&repo),
         Commands::Stats { repo } => run_stats(&repo),
     }
@@ -301,9 +318,11 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
         resolved.full_name,
     );
 
-    // Reflection pass: generate deeper cross-cutting insights.
+    // Reflection pass: only on full/reindex runs, not single-commit incremental.
+    // Reflecting on 1 new commit is wasteful — reflections need breadth.
+    let is_incremental_small = since_sha.is_some() && total_insights <= 3;
     let all_insights = db.list_all()?;
-    if all_insights.len() >= 3 {
+    if all_insights.len() >= 3 && !is_incremental_small {
         println!("Reflecting on {} insights...", all_insights.len());
         let reflections = reflect::generate_reflections(
             &all_insights,
@@ -395,6 +414,25 @@ fn run_search(repo_arg: &str, query: &str, limit: usize, json_output: bool, deep
     }
 
     Ok(())
+}
+
+fn run_init(dir: &Path) -> Result<()> {
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+
+    // Install the hook.
+    install::install_hook(&dir)?;
+
+    // Run initial index.
+    println!("\nRunning initial index...");
+    run_index(&dir, 5000, 8, false)?;
+
+    println!("\ndiwa is installed. New commits will be indexed automatically.");
+    Ok(())
+}
+
+fn run_uninit(dir: &Path) -> Result<()> {
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    install::uninstall_hook(&dir)
 }
 
 fn run_browse(repo_arg: &str) -> Result<()> {
