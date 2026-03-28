@@ -131,10 +131,18 @@ Categories: `decision`, `pattern`, `learning`, `architecture`, `migration`, `bug
 
 ## Install
 
-### Homebrew (macOS)
+### Homebrew (macOS / Linux)
 
 ```bash
-brew tap Dorky-Robot/tap && brew install diwa
+# Add the Dorky Robot tap (one-time)
+brew tap Dorky-Robot/tap
+
+# Install diwa
+brew install diwa
+
+# If you already have the tap but diwa isn't found, refresh it:
+cd /opt/homebrew/Library/Taps/dorky-robot/homebrew-tap && git pull
+brew install diwa
 ```
 
 ### Install script (Linux/macOS)
@@ -142,6 +150,8 @@ brew tap Dorky-Robot/tap && brew install diwa
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Dorky-Robot/diwa/main/install.sh | sh
 ```
+
+Falls back to `cargo install` if no prebuilt binary is available for your platform.
 
 ### Docker
 
@@ -153,6 +163,8 @@ docker run --rm -v $(pwd):/repo -v ~/.diwa:/root/.diwa ghcr.io/dorky-robot/diwa 
 ### From source
 
 ```bash
+git clone https://github.com/Dorky-Robot/diwa.git
+cd diwa
 cargo install --path .
 ```
 
