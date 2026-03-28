@@ -58,6 +58,9 @@ pub enum Commands {
 
     /// Search indexed git history
     Search {
+        /// Repo name or path (e.g. "yelo", "Dorky-Robot/yelo", or a directory path)
+        repo: String,
+
         /// Search query
         query: String,
 
@@ -69,10 +72,6 @@ pub enum Commands {
         #[arg(short, default_value = "10")]
         n: usize,
 
-        /// Target directory (default: current dir)
-        #[arg(long, default_value = ".")]
-        dir: PathBuf,
-
         /// Deep search: Claude synthesizes an answer from multiple queries
         #[arg(long, default_value_t = false)]
         deep: bool,
@@ -80,16 +79,16 @@ pub enum Commands {
 
     /// Browse insights in a scrollable TUI
     Browse {
-        /// Target directory (default: current dir)
+        /// Repo name or path (default: current dir)
         #[arg(default_value = ".")]
-        dir: PathBuf,
+        repo: String,
     },
 
     /// Show index stats
     Stats {
-        /// Target directory (default: current dir)
+        /// Repo name or path (default: current dir)
         #[arg(default_value = ".")]
-        dir: PathBuf,
+        repo: String,
     },
 }
 
@@ -114,14 +113,14 @@ fn run(cli: Cli) -> Result<()> {
             batch_size,
         } => run_index(&dir, max_commits, batch_size, true),
         Commands::Search {
+            repo,
             query,
             json,
             n,
-            dir,
             deep,
-        } => run_search(&dir, &query, n, json, deep),
-        Commands::Browse { dir } => run_browse(&dir),
-        Commands::Stats { dir } => run_stats(&dir),
+        } => run_search(&repo, &query, n, json, deep),
+        Commands::Browse { repo } => run_browse(&repo),
+        Commands::Stats { repo } => run_stats(&repo),
     }
 }
 
@@ -141,6 +140,77 @@ fn dirs_or_default(env_key: &str, fallback_name: &str) -> PathBuf {
 
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// Resolve a repo argument to a slug for the index.
+///
+/// Accepts:
+///   "yelo"              → finds matching slug in ~/.diwa/ (e.g. "Dorky-Robot--yelo")
+///   "Dorky-Robot/yelo"  → "Dorky-Robot--yelo"
+///   "."                 → resolves via git remote
+///   "/path/to/repo"     → resolves via git remote
+fn resolve_slug(repo_arg: &str) -> Result<String> {
+    let diwa = diwa_dir();
+
+    // If it looks like a path (starts with . or /), resolve via git remote.
+    if repo_arg.starts_with('.') || repo_arg.starts_with('/') {
+        let resolved = repo::resolve_repo(Path::new(repo_arg))?;
+        return Ok(format!("{}--{}", resolved.owner, resolved.name));
+    }
+
+    // If it contains a slash, treat as owner/repo.
+    if repo_arg.contains('/') {
+        return Ok(repo_arg.replace('/', "--"));
+    }
+
+    // Otherwise, search ~/.diwa/ for a matching slug.
+    if diwa.exists() {
+        let entries: Vec<String> = std::fs::read_dir(&diwa)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|name| name != "models")
+            .collect();
+
+        // Exact suffix match: "yelo" matches "Dorky-Robot--yelo"
+        let matches: Vec<&String> = entries
+            .iter()
+            .filter(|name| {
+                name.split("--")
+                    .last()
+                    .map(|n| n.eq_ignore_ascii_case(repo_arg))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        if matches.len() == 1 {
+            return Ok(matches[0].clone());
+        }
+        if matches.len() > 1 {
+            anyhow::bail!(
+                "Ambiguous repo name '{repo_arg}'. Matches: {}",
+                matches.iter().map(|m| m.replace("--", "/")).collect::<Vec<_>>().join(", ")
+            );
+        }
+
+        // Fuzzy: contains the name anywhere
+        let fuzzy: Vec<&String> = entries
+            .iter()
+            .filter(|name| name.to_lowercase().contains(&repo_arg.to_lowercase()))
+            .collect();
+
+        if fuzzy.len() == 1 {
+            return Ok(fuzzy[0].clone());
+        }
+        if fuzzy.len() > 1 {
+            anyhow::bail!(
+                "Ambiguous repo name '{repo_arg}'. Did you mean one of: {}",
+                fuzzy.iter().map(|m| m.replace("--", "/")).collect::<Vec<_>>().join(", ")
+            );
+        }
+    }
+
+    anyhow::bail!("No indexed repo matching '{repo_arg}'. Run `diwa index` in the repo first.")
 }
 
 fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -> Result<()> {
@@ -269,11 +339,9 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
     Ok(())
 }
 
-fn run_search(dir: &Path, query: &str, limit: usize, json_output: bool, deep: bool) -> Result<()> {
+fn run_search(repo_arg: &str, query: &str, limit: usize, json_output: bool, deep: bool) -> Result<()> {
     let diwa = diwa_dir();
-    let resolved = repo::resolve_repo(dir)?;
-    let slug = format!("{}--{}", resolved.owner, resolved.name);
-
+    let slug = resolve_slug(repo_arg)?;
     let db = db::IndexDb::open(&diwa, &slug)?;
 
     // Deep search: Claude drives retrieval and synthesizes an answer.
@@ -329,21 +397,20 @@ fn run_search(dir: &Path, query: &str, limit: usize, json_output: bool, deep: bo
     Ok(())
 }
 
-fn run_browse(dir: &Path) -> Result<()> {
+fn run_browse(repo_arg: &str) -> Result<()> {
     let diwa = diwa_dir();
-    let resolved = repo::resolve_repo(dir)?;
-    let slug = format!("{}--{}", resolved.owner, resolved.name);
-
+    let slug = resolve_slug(repo_arg)?;
     let db = db::IndexDb::open(&diwa, &slug)?;
     let insights = db.list_all()?;
+    let display_name = slug.replace("--", "/");
 
-    browse::run_browse(insights, &resolved.full_name)
+    browse::run_browse(insights, &display_name)
 }
 
-fn run_stats(dir: &Path) -> Result<()> {
+fn run_stats(repo_arg: &str) -> Result<()> {
     let diwa = diwa_dir();
-    let resolved = repo::resolve_repo(dir)?;
-    let slug = format!("{}--{}", resolved.owner, resolved.name);
+    let slug = resolve_slug(repo_arg)?;
+    let display_name = slug.replace("--", "/");
 
     let db = db::IndexDb::open(&diwa, &slug)?;
 
@@ -351,7 +418,7 @@ fn run_stats(dir: &Path) -> Result<()> {
     let with_embeddings = db.count_with_embeddings()?;
     let last_sha = db.last_indexed_sha()?.unwrap_or_else(|| "(none)".into());
 
-    println!("diwa index for {}", resolved.full_name);
+    println!("diwa index for {}", display_name);
     println!("  Insights:      {total}");
     println!("  With vectors:  {with_embeddings}");
     println!(
