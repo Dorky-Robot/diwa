@@ -104,16 +104,14 @@ fn synthesize(query: &str, candidates: &[&SearchResult]) -> Result<String> {
 
 "{query}"
 
-Below are relevant insights extracted from the git history. Synthesize a clear, coherent answer that:
-- Directly answers the question
-- References specific commits (by SHA) as evidence
-- Tells the story, not just lists facts
-- Notes what was tried and didn't work, if relevant
-- Is honest about uncertainty — if the insights don't fully answer the question, say so
+Below are relevant insights from the git history. Give a SHORT, direct answer.
 
-Write 2-4 paragraphs. No markdown headers. Cite commits inline like (commit abc1234).
-
-At the end, add a "Sources:" section listing the insight titles you drew from.
+Rules:
+- 2-4 sentences max. Be concise. No filler.
+- Cite commits inline like (abc1234) as evidence.
+- If something was tried and failed, mention it in one clause, not a paragraph.
+- If the insights don't answer the question, say "Not enough evidence" and stop.
+- No markdown headers, no bullet lists, no "Sources:" section.
 
 Here are the insights:
 
