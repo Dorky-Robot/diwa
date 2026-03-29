@@ -108,7 +108,7 @@ pub enum Commands {
         dir: PathBuf,
     },
 
-    /// Update diwa binary and refresh all indexed repos
+    /// Refresh hooks and reindex all registered repos
     Update,
 
     /// Show index stats
@@ -626,21 +626,9 @@ fn run_uninit(dir: &Path) -> Result<()> {
 fn run_update() -> Result<()> {
     let diwa = diwa_dir();
 
-    // Step 1: Update the binary.
-    println!("Updating diwa...");
-    let brew_result = std::process::Command::new("brew")
-        .args(["upgrade", "diwa"])
-        .status();
+    println!("diwa v{}", env!("CARGO_PKG_VERSION"));
 
-    match brew_result {
-        Ok(s) if s.success() => println!("Binary updated via brew."),
-        _ => {
-            println!("brew upgrade not available or failed — skipping binary update.");
-            println!("Update manually: brew upgrade diwa, or cargo install --path .");
-        }
-    }
-
-    // Step 2: Refresh hooks and index for all registered repos.
+    // Refresh hooks and index for all registered repos.
     let repos = manifest::read_manifest(&diwa);
 
     if repos.is_empty() {
