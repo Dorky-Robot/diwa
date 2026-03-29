@@ -284,32 +284,58 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
     let total_batches = batches.len();
     let mut total_insights = 0;
 
+    // Pipeline: while Claude processes batch N+1, embed + store batch N in a background thread.
+    let mut pending: Option<std::thread::JoinHandle<anyhow::Result<(Vec<db::Insight>, Vec<Vec<f32>>, String)>>> = None;
+
     for (i, batch) in batches.iter().enumerate() {
         print!("  Batch {}/{total_batches}...", i + 1);
 
+        // Start Claude extraction (blocking — this is the slow part).
         let insights = extract::extract_insights(batch);
+        let last_sha = batch.last().map(|c| c.sha.clone()).unwrap_or_default();
+
+        // While we wait for nothing here, flush the previous batch's embeddings.
+        if let Some(handle) = pending.take() {
+            match handle.join() {
+                Ok(Ok((prev_insights, prev_embeddings, prev_sha))) => {
+                    db.insert_insights_with_embeddings(&prev_insights, Some(&prev_embeddings))?;
+                    db.set_last_indexed_sha(&prev_sha)?;
+                    total_insights += prev_insights.len();
+                }
+                Ok(Err(e)) => eprintln!("\n  Warning: embedding failed ({e})"),
+                Err(_) => eprintln!("\n  Warning: embedding thread panicked"),
+            }
+        }
 
         if !insights.is_empty() {
-            let texts: Vec<String> = insights.iter().map(|ins| ins.embedding_text()).collect();
-            match embed::embed_batch(&texts) {
-                Ok(embeddings) => {
-                    db.insert_insights_with_embeddings(&insights, Some(&embeddings))?;
-                    print!(" {} insights + embeddings", insights.len());
-                }
-                Err(e) => {
-                    eprintln!("\n  Warning: embedding failed ({e}), storing without vectors");
-                    db.insert_insights(&insights)?;
-                    print!(" {} insights (no vectors)", insights.len());
-                }
-            }
-            total_insights += insights.len();
+            print!(" {} insights", insights.len());
+            // Spawn embedding in background thread.
+            let insights_clone = insights.clone();
+            let sha = last_sha.clone();
+            pending = Some(std::thread::spawn(move || {
+                let texts: Vec<String> = insights_clone.iter().map(|ins| ins.embedding_text()).collect();
+                let embeddings = embed::embed_batch(&texts)?;
+                Ok((insights_clone, embeddings, sha))
+            }));
         } else {
             print!(" (no insights)");
+            if !last_sha.is_empty() {
+                db.set_last_indexed_sha(&last_sha)?;
+            }
         }
         println!();
+    }
 
-        if let Some(last) = batch.last() {
-            db.set_last_indexed_sha(&last.sha)?;
+    // Flush the last pending batch.
+    if let Some(handle) = pending.take() {
+        match handle.join() {
+            Ok(Ok((prev_insights, prev_embeddings, prev_sha))) => {
+                db.insert_insights_with_embeddings(&prev_insights, Some(&prev_embeddings))?;
+                db.set_last_indexed_sha(&prev_sha)?;
+                total_insights += prev_insights.len();
+            }
+            Ok(Err(e)) => eprintln!("  Warning: embedding failed ({e})"),
+            Err(_) => eprintln!("  Warning: embedding thread panicked"),
         }
     }
 
@@ -371,13 +397,16 @@ fn run_search(repo_arg: &str, query: &str, limit: usize, json_output: bool, deep
         return Ok(());
     }
 
-    // Hybrid search: FTS5 keywords + vector similarity.
-    let query_embedding = if db.count_with_embeddings()? > 0 {
-        embed::embed(query).ok()
+    // Start embedding in background while we prepare the search.
+    let has_embeddings = db.count_with_embeddings()? > 0;
+    let query_owned = query.to_string();
+    let embed_handle = if has_embeddings {
+        Some(std::thread::spawn(move || embed::embed(&query_owned).ok()))
     } else {
         None
     };
 
+    let query_embedding = embed_handle.and_then(|h| h.join().ok()).flatten();
     let results = db.search_hybrid(query, query_embedding.as_deref(), limit)?;
 
     if results.is_empty() {

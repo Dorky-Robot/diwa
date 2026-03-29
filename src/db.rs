@@ -229,54 +229,79 @@ impl IndexDb {
         query_embedding: &[f32],
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
-        // Load all embeddings and compute cosine similarity.
-        // For indexes up to ~50k rows this is fast enough (<10ms).
+        // Two-pass approach: first compute cosine similarity on raw bytes (cheap),
+        // then load full rows only for top-N candidates (avoids deserializing
+        // JSON files arrays and allocating strings for rows we'll discard).
+
+        // Pass 1: score all embeddings, keep only top-N IDs.
         let mut stmt = self.conn.prepare(
-            "SELECT id, commit_sha, commit_date, category, title, body,
-                    files, tags, source_type, pr_number, embedding
-             FROM insights
-             WHERE embedding IS NOT NULL",
+            "SELECT id, embedding FROM insights WHERE embedding IS NOT NULL",
         )?;
 
-        let mut scored: Vec<(SearchResult, f32)> = stmt
+        let mut scored: Vec<(i64, f32)> = stmt
             .query_map([], |row| {
-                let embedding_bytes: Vec<u8> = row.get(10)?;
-                let files_str: String = row.get(6)?;
-                let files: Vec<String> = serde_json::from_str(&files_str).unwrap_or_default();
-                Ok((
-                    SearchResult {
-                        id: row.get(0)?,
-                        commit_sha: row.get(1)?,
-                        commit_date: row.get(2)?,
-                        category: row.get(3)?,
-                        title: row.get(4)?,
-                        body: row.get(5)?,
-                        files,
-                        tags: row.get(7)?,
-                        source_type: row.get(8)?,
-                        pr_number: row.get(9)?,
-                        rank: 0.0,
-                    },
-                    embedding_bytes,
-                ))
+                let id: i64 = row.get(0)?;
+                let bytes: Vec<u8> = row.get(1)?;
+                Ok((id, bytes))
             })?
             .filter_map(|r| r.ok())
-            .map(|(result, embedding_bytes)| {
-                let stored = embedding_from_bytes(&embedding_bytes);
+            .map(|(id, bytes)| {
+                let stored = embedding_from_bytes(&bytes);
                 let sim = cosine_similarity(query_embedding, &stored);
-                (result, sim)
+                (id, sim)
             })
             .collect();
 
-        // Sort by similarity descending.
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(limit);
 
+        if scored.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Pass 2: load full rows for top-N only.
+        let ids: Vec<String> = scored.iter().map(|(id, _)| id.to_string()).collect();
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT id, commit_sha, commit_date, category, title, body,
+                    files, tags, source_type, pr_number
+             FROM insights WHERE id IN ({placeholders})"
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            scored.iter().map(|(id, _)| id as &dyn rusqlite::types::ToSql).collect();
+
+        let mut results_map: std::collections::HashMap<i64, SearchResult> = stmt
+            .query_map(params.as_slice(), |row| {
+                let id: i64 = row.get(0)?;
+                let files_str: String = row.get(6)?;
+                let files: Vec<String> = serde_json::from_str(&files_str).unwrap_or_default();
+                Ok((id, SearchResult {
+                    id,
+                    commit_sha: row.get(1)?,
+                    commit_date: row.get(2)?,
+                    category: row.get(3)?,
+                    title: row.get(4)?,
+                    body: row.get(5)?,
+                    files,
+                    tags: row.get(7)?,
+                    source_type: row.get(8)?,
+                    pr_number: row.get(9)?,
+                    rank: 0.0,
+                }))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // Reassemble in score order.
         Ok(scored
             .into_iter()
-            .map(|(mut r, sim)| {
-                r.rank = sim as f64;
-                r
+            .filter_map(|(id, sim)| {
+                results_map.remove(&id).map(|mut r| {
+                    r.rank = sim as f64;
+                    r
+                })
             })
             .collect())
     }
