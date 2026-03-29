@@ -37,15 +37,44 @@ fn try_should_reflect(
     existing_reflections: &[SearchResult],
 ) -> anyhow::Result<bool> {
     let mut prompt = String::from(
-        r#"You are deciding whether a set of new development insights warrants generating deeper cross-cutting reflections.
+        r#"You are deciding whether new development insights warrant generating REFLECTIONS.
 
-Reflections are expensive — they should only be generated when there is genuinely new material that changes the picture: an architectural shift, a pattern emerging across multiple commits, a resolved debate, a significant pivot, or a lesson that only becomes visible in retrospect.
+## What reflections are
 
-Do NOT recommend reflection for:
-- Routine bug fixes with no deeper pattern
-- Minor refactors or cleanup
-- Version bumps, CI changes, docs tweaks
-- Insights that are already covered by existing reflections
+Reflections are cross-cutting insights that only become visible when you look across many individual changes. They are the things a senior engineer would say in a retrospective — not about any single commit, but about the arc of work over time.
+
+A good reflection:
+- Connects dots between multiple insights that individually seem unrelated
+- Identifies a pattern that repeated (intentionally or accidentally)
+- Names an approach that was tried, abandoned, and what replaced it — and why that matters
+- Surfaces an architectural direction that emerged from many small decisions
+- Captures a lesson that no single commit teaches but the sequence reveals
+
+A reflection is NOT:
+- A summary of recent changes (that's a changelog)
+- A restatement of an individual insight in different words
+- A prediction about what should happen next
+- Commentary on code quality or style
+
+## When to say yes
+
+Say yes when the new insights contain material that would CHANGE or EXTEND the existing reflections in a meaningful way. Examples:
+- A series of related fixes that reveal a systemic issue
+- A migration or rewrite that completed across multiple commits
+- A pattern that emerged (build → break → fix → learn) across several insights
+- A decision that reversed or contradicted an earlier one
+- New insights in a domain the existing reflections don't cover at all
+
+## When to say no
+
+Say no when the new insights are:
+- Routine bug fixes with no deeper pattern connecting them
+- Minor refactors, cleanup, or formatting
+- Version bumps, CI changes, dependency updates
+- Already well-covered by the existing reflections
+- Too few or too shallow to synthesize anything the individual insights don't already say
+
+The bar is: would a new engineer onboarding to this project learn something genuinely new from a reflection on this material that they couldn't learn from reading the individual insights?
 
 EXISTING REFLECTIONS (what we already know):
 "#,
@@ -215,28 +244,41 @@ fn build_prompt(
     ground_truth: &str,
 ) -> String {
     let mut prompt = format!(
-        r#"You are reflecting on the development history of {repo_name} over {period}. Below are individual insights extracted from commits, PLUS ground truth data from the actual repository (git log, file tree, file contents, PRs).
+        r#"You are generating REFLECTIONS on the development history of {repo_name} over {period}.
 
-Your job is to find DEEPER patterns — arcs and journeys that only become visible across many changes.
+## What reflections are
 
-CRITICAL RULES:
-- Every claim you make MUST be verifiable from the ground truth data provided (git log, file contents, PRs).
+Reflections are cross-cutting insights that only become visible when you look across many individual changes. They are what a senior engineer would say in a retrospective — not about any single commit, but about the arc of work over time.
+
+A good reflection:
+- Connects dots between multiple insights that individually seem unrelated
+- Identifies a pattern that repeated (intentionally or accidentally)
+- Names an approach that was tried, abandoned, and what replaced it — and why that matters
+- Surfaces an architectural direction that emerged from many small decisions
+- Captures a lesson that no single commit teaches but the sequence reveals
+
+A reflection is NOT:
+- A summary of recent changes (that's a changelog)
+- A restatement of an individual insight in different words
+- A prediction about what should happen next
+- Commentary on code quality or style
+
+The bar: would a new engineer onboarding to this project learn something genuinely new from this reflection that they couldn't learn from reading the individual insights?
+
+## Grounding rules
+
+- Every claim MUST be verifiable from the ground truth data provided below.
 - Do NOT invent details, file names, or events that aren't in the evidence.
-- If you're unsure about something, don't include it.
-- Reference specific commits (by SHA) or files to anchor your reflections.
-- If the insights mention something but the ground truth contradicts it, trust the ground truth.
+- Reference specific commits (by SHA) or files as evidence.
+- If the insights say one thing but the ground truth contradicts it, trust the ground truth.
+- If you're unsure, don't include it.
 
-Think like a senior engineer doing a retrospective:
-- What was the real journey this {period}? Not the commits — the story.
-- What patterns keep repeating? Are they intentional or accidental?
-- What was tried, abandoned, and what eventually stuck? What does that reveal?
-- What architectural direction is emerging that no single commit shows?
-- What hard-won lessons emerged from the sequence of changes?
+## Output format
 
-Output ONLY a JSON array. Each element must have:
+JSON array. Each element:
 - "category": always "reflection"
 - "title": a one-line insight that could only come from seeing the full arc
-- "body": 3-6 sentences of deep analysis. Reference specific commits or files as evidence.
+- "body": 3-6 sentences. Reference specific commits or files as evidence.
 - "tags": space-separated tags
 - "commit_sha": use the SHA from the most relevant commit
 - "files": array of key files relevant to the reflection
