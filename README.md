@@ -15,7 +15,7 @@ cd your-repo
 diwa init
 ```
 
-That's it. diwa indexes your full history and installs a git hook so new commits are indexed automatically. Now search:
+That's it. `diwa init` indexes your full commit history and installs a `post-commit` git hook so future commits are indexed automatically — the knowledge base stays current without you thinking about it. Now search:
 
 ```bash
 diwa search your-repo "why did we switch to pull-based rendering"
@@ -61,7 +61,7 @@ The query contains none of the words in the results — no "Go", no "Rust", no "
 
 ### Deep search
 
-For complex questions, `--deep` has Claude synthesize an answer from multiple queries:
+For complex questions, `--deep` researches like a human would — starts with one search, reads the results, follows interesting threads, and spot-checks commits and code when needed:
 
 ```
 $ diwa search yelo "why did they rewrite in rust" --deep
@@ -102,8 +102,8 @@ diwa init
 
 diwa search
   1. Hybrid search: 30% BM25 keyword matching + 70% cosine vector similarity
-  2. With --deep: Claude generates multiple search strategies, retrieves
-     candidates, and synthesizes a narrative answer with citations
+  2. With --deep: Claude reads results, follows threads, spot-checks
+     commits and code, and synthesizes a narrative answer with citations
 ```
 
 ### Why semantic search matters
