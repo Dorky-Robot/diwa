@@ -353,53 +353,79 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
         resolved.full_name,
     );
 
-    // Reflection pass: let Claude decide if new material warrants deeper insights.
+    // Reflection pass: two triggers.
+    // 1. Claude decides new material warrants it (event-driven).
+    // 2. It's been 7+ days since last reflection (periodic — step back and look at the big picture).
     let level1_count = db.count_level1()?;
     let last_reflection_at = db.last_reflection_count()?;
     let new_insights = db.list_insights_since_count(last_reflection_at)?;
     let existing_reflections = db.list_reflections()?;
 
-    if !new_insights.is_empty() {
-        print!("Checking if new insights warrant reflection... ");
-        if reflect::should_reflect(&new_insights, &existing_reflections) {
-            println!("yes.");
+    let days_since_reflection = db
+        .last_reflection_time()?
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(&t).ok())
+        .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_days())
+        .unwrap_or(i64::MAX); // Never reflected → treat as overdue.
 
-            let cleared = db.clear_reflections()?;
-            if cleared > 0 {
-                println!("Cleared {cleared} stale reflections.");
-            }
+    let periodic_due = days_since_reflection >= 7 && level1_count >= 3;
+    let event_driven = !new_insights.is_empty()
+        && reflect::should_reflect(&new_insights, &existing_reflections);
 
-            let all_insights = db.list_all()?;
-            println!("Reflecting on {} insights...", all_insights.len());
-            let reflections = reflect::generate_reflections(
-                &all_insights,
-                &resolved.full_name,
-                &resolved.local_path,
-                "the indexed history",
-            );
+    let should_reflect = periodic_due || event_driven;
 
-            if !reflections.is_empty() {
-                let texts: Vec<String> =
-                    reflections.iter().map(|r| r.embedding_text()).collect();
-                match embed::embed_batch(&texts) {
-                    Ok(embeddings) => {
-                        db.insert_insights_with_embeddings(&reflections, Some(&embeddings))?;
-                    }
-                    Err(_) => {
-                        db.insert_insights(&reflections)?;
-                    }
-                }
-
-                println!("{} reflections added:", reflections.len());
-                for r in &reflections {
-                    println!("  - {}", r.title);
-                }
-            }
-
-            db.set_last_reflection_count(level1_count)?;
+    if should_reflect {
+        let reason = if periodic_due && !event_driven {
+            format!("periodic ({days_since_reflection} days since last reflection)")
+        } else if event_driven && !periodic_due {
+            "new material warrants it".to_string()
         } else {
-            println!("not yet.");
+            format!("new material + {days_since_reflection} days since last")
+        };
+        println!("Reflecting: {reason}.");
+
+        let cleared = db.clear_reflections()?;
+        if cleared > 0 {
+            println!("Cleared {cleared} stale reflections.");
         }
+
+        let all_insights = db.list_all()?;
+        println!("Reflecting on {} insights...", all_insights.len());
+
+        let period_label = if periodic_due {
+            "the full project history"
+        } else {
+            "recent changes"
+        };
+
+        let reflections = reflect::generate_reflections(
+            &all_insights,
+            &resolved.full_name,
+            &resolved.local_path,
+            period_label,
+        );
+
+        if !reflections.is_empty() {
+            let texts: Vec<String> =
+                reflections.iter().map(|r| r.embedding_text()).collect();
+            match embed::embed_batch(&texts) {
+                Ok(embeddings) => {
+                    db.insert_insights_with_embeddings(&reflections, Some(&embeddings))?;
+                }
+                Err(_) => {
+                    db.insert_insights(&reflections)?;
+                }
+            }
+
+            println!("{} reflections added:", reflections.len());
+            for r in &reflections {
+                println!("  - {}", r.title);
+            }
+        }
+
+        db.set_last_reflection_count(level1_count)?;
+        db.set_last_reflection_time()?;
+    } else if !new_insights.is_empty() {
+        println!("New insights don't warrant reflection yet.");
     }
 
     println!(

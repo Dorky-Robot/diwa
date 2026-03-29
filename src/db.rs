@@ -445,6 +445,28 @@ impl IndexDb {
         Ok(())
     }
 
+    /// Get the timestamp of the last reflection.
+    pub fn last_reflection_time(&self) -> Result<Option<String>> {
+        let result = self.conn.query_row(
+            "SELECT value FROM meta WHERE key = 'last_reflection_time'",
+            [],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(time) => Ok(Some(time)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn set_last_reflection_time(&self) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_reflection_time', ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
     /// Count non-reflection insights (Level 1 only).
     pub fn count_level1(&self) -> Result<usize> {
         let count: usize = self.conn.query_row(
