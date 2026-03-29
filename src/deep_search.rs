@@ -6,11 +6,12 @@
 //! researcher pulling on threads until the question is answered.
 
 use crate::claude;
-use crate::db::IndexDb;
+use crate::db::{IndexDb, SearchResult};
 use crate::embed;
 use crate::spinner::Spinner;
 use anyhow::Result;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -41,18 +42,23 @@ struct Step {
 pub fn deep_search(db: &IndexDb, query: &str, repo_path: Option<&Path>) -> Result<String> {
     let spinner = Spinner::start("Searching...");
 
-    // Start with the user's actual query.
-    let initial_results = run_search(db, query)?;
+    // Track all search results we encounter for the commit index.
+    let mut seen_results: HashMap<String, SearchResult> = HashMap::new();
 
-    if initial_results.is_empty() {
+    // Start with the user's actual query.
+    let (initial_text, initial_hits) = run_search(db, query)?;
+
+    if initial_hits.is_empty() {
         spinner.stop();
         return Ok(format!("No insights found for: {query}"));
     }
 
+    collect_results(&mut seen_results, initial_hits);
+
     // Build up a research trail — each entry is (label, content).
     let mut trail: Vec<(String, String)> = vec![(
         format!("search: \"{query}\""),
-        initial_results,
+        initial_text,
     )];
 
     // Now let Claude read the results and decide what to do next.
@@ -70,14 +76,16 @@ pub fn deep_search(db: &IndexDb, query: &str, repo_path: Option<&Path>) -> Resul
         match next.status.as_str() {
             "done" => {
                 spinner.stop();
-                return Ok(next.answer.unwrap_or_else(|| {
+                let answer = next.answer.unwrap_or_else(|| {
                     "Deep search completed but produced no answer.".to_string()
-                }));
+                });
+                return Ok(append_commit_index(&answer, &seen_results));
             }
             "search" => {
                 let q = next.query.as_deref().unwrap_or(query);
-                let results = run_search(db, q)?;
-                trail.push((format!("search: \"{q}\""), results));
+                let (text, hits) = run_search(db, q)?;
+                collect_results(&mut seen_results, hits);
+                trail.push((format!("search: \"{q}\""), text));
             }
             "git_show" => {
                 let sha = next.sha.as_deref().unwrap_or("HEAD");
@@ -103,7 +111,7 @@ pub fn deep_search(db: &IndexDb, query: &str, repo_path: Option<&Path>) -> Resul
     spinner.set_message("Synthesizing...");
     let answer = force_synthesize(query, &trail)?;
     spinner.stop();
-    Ok(answer)
+    Ok(append_commit_index(&answer, &seen_results))
 }
 
 fn decide_next_step(query: &str, trail: &[(String, String)]) -> Result<Step> {
@@ -212,12 +220,12 @@ fn parse_step(response: &str) -> Result<Step> {
 
 // --- Tool execution ---
 
-fn run_search(db: &IndexDb, query: &str) -> Result<String> {
+fn run_search(db: &IndexDb, query: &str) -> Result<(String, Vec<SearchResult>)> {
     let query_embedding = embed::embed(query).ok();
     let results = db.search_hybrid(query, query_embedding.as_deref(), SEARCH_LIMIT)?;
 
     if results.is_empty() {
-        return Ok("No results found.".into());
+        return Ok(("No results found.".into(), vec![]));
     }
 
     let mut out = String::new();
@@ -236,7 +244,59 @@ fn run_search(db: &IndexDb, query: &str) -> Result<String> {
         ));
     }
 
-    Ok(out)
+    Ok((out, results))
+}
+
+fn collect_results(seen: &mut HashMap<String, SearchResult>, results: Vec<SearchResult>) {
+    for r in results {
+        let short = r.commit_sha[..7.min(r.commit_sha.len())].to_string();
+        seen.entry(short).or_insert(r);
+    }
+}
+
+/// Scan the answer for commit SHAs like (abc1234) and append a commit index footer.
+fn append_commit_index(answer: &str, seen: &HashMap<String, SearchResult>) -> String {
+    // Extract all 7-char hex strings in parentheses from the answer.
+    let mut cited: Vec<(String, String)> = Vec::new();
+    let mut cited_set = std::collections::HashSet::new();
+
+    let mut i = 0;
+    let bytes = answer.as_bytes();
+    while i < bytes.len() {
+        if bytes[i] == b'(' && i + 8 < bytes.len() && bytes[i + 8] == b')' {
+            let candidate = &answer[i + 1..i + 8];
+            if candidate.chars().all(|c| c.is_ascii_hexdigit()) && !cited_set.contains(candidate) {
+                cited_set.insert(candidate.to_string());
+                let date = seen
+                    .get(candidate)
+                    .map(|r| {
+                        r.commit_date
+                            .split('T')
+                            .next()
+                            .unwrap_or(&r.commit_date)
+                            .to_string()
+                    })
+                    .unwrap_or_else(|| "git".into());
+                cited.push((candidate.to_string(), date));
+            }
+            i += 9;
+        } else {
+            i += 1;
+        }
+    }
+
+    if cited.is_empty() {
+        return answer.to_string();
+    }
+
+    let mut out = answer.to_string();
+    out.push_str("\n\n\x1b[90m---\x1b[0m\n");
+    out.push_str("\x1b[90mCommits:\x1b[0m\n");
+    for (sha, date) in &cited {
+        out.push_str(&format!("  \x1b[90m{sha}  {date}\x1b[0m\n"));
+    }
+
+    out
 }
 
 fn run_git_show(sha: &str, repo_path: Option<&Path>) -> Result<String> {
