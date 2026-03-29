@@ -79,6 +79,13 @@ pub enum Commands {
         deep: bool,
     },
 
+    /// Force-regenerate reflections (deeper cross-commit insights)
+    Reflect {
+        /// Repo name or path (default: current dir)
+        #[arg(default_value = ".")]
+        repo: String,
+    },
+
     /// Browse insights in a scrollable TUI
     Browse {
         /// Repo name or path (default: current dir)
@@ -135,6 +142,7 @@ fn run(cli: Cli) -> Result<()> {
             n,
             deep,
         } => run_search(&repo, &query, n, json, deep),
+        Commands::Reflect { repo } => run_reflect(&repo),
         Commands::Init { dir } => run_init(&dir),
         Commands::Uninit { dir } => run_uninit(&dir),
         Commands::Browse { repo } => run_browse(&repo),
@@ -345,11 +353,22 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
         resolved.full_name,
     );
 
-    // Reflection pass: only on full/reindex runs, not single-commit incremental.
-    // Reflecting on 1 new commit is wasteful — reflections need breadth.
-    let is_incremental_small = since_sha.is_some() && total_insights <= 3;
-    let all_insights = db.list_all()?;
-    if all_insights.len() >= 3 && !is_incremental_small {
+    // Reflection pass: regenerate when enough new insights have accumulated.
+    // Threshold: every 10 new Level 1 insights triggers a fresh reflection.
+    const REFLECTION_THRESHOLD: usize = 10;
+    let level1_count = db.count_level1()?;
+    let last_reflection_at = db.last_reflection_count()?;
+    let due_for_reflection = level1_count >= 3
+        && (last_reflection_at == 0 || level1_count - last_reflection_at >= REFLECTION_THRESHOLD);
+
+    if due_for_reflection {
+        // Clear old reflections — they'll be regenerated from all current insights.
+        let cleared = db.clear_reflections()?;
+        if cleared > 0 {
+            println!("Cleared {cleared} stale reflections.");
+        }
+
+        let all_insights = db.list_all()?;
         println!("Reflecting on {} insights...", all_insights.len());
         let reflections = reflect::generate_reflections(
             &all_insights,
@@ -374,6 +393,8 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
                 println!("  - {}", r.title);
             }
         }
+
+        db.set_last_reflection_count(level1_count)?;
     }
 
     println!(
@@ -459,6 +480,78 @@ fn run_search(repo_arg: &str, query: &str, limit: usize, json_output: bool, deep
         }
     }
 
+    Ok(())
+}
+
+fn run_reflect(repo_arg: &str) -> Result<()> {
+    let diwa = diwa_dir();
+    let slug = resolve_slug(repo_arg)?;
+    let display_name = slug.replace("--", "/");
+    let db = db::IndexDb::open(&diwa, &slug)?;
+
+    let level1_count = db.count_level1()?;
+    if level1_count < 3 {
+        println!("Not enough insights to reflect on ({level1_count}). Need at least 3.");
+        return Ok(());
+    }
+
+    // Clear old reflections.
+    let cleared = db.clear_reflections()?;
+    if cleared > 0 {
+        println!("Cleared {cleared} stale reflections.");
+    }
+
+    let all_insights = db.list_all()?;
+    println!("Reflecting on {} insights for {display_name}...", all_insights.len());
+
+    // Try to get repo path for ground truth. Works if repo_arg is a path or cwd.
+    let repo_path = if repo_arg.starts_with('.') || repo_arg.starts_with('/') {
+        Some(std::path::PathBuf::from(repo_arg).canonicalize().unwrap_or_default())
+    } else {
+        // Try resolving from cwd.
+        repo::resolve_repo(std::path::Path::new("."))
+            .ok()
+            .map(|r| r.local_path)
+    };
+
+    let reflections = match repo_path {
+        Some(ref path) => {
+            reflect::generate_reflections(&all_insights, &display_name, path, "the indexed history")
+        }
+        None => {
+            // No local path — reflect without ground truth.
+            reflect::generate_reflections(
+                &all_insights,
+                &display_name,
+                std::path::Path::new("."),
+                "the indexed history",
+            )
+        }
+    };
+
+    if reflections.is_empty() {
+        println!("No reflections generated.");
+        return Ok(());
+    }
+
+    let texts: Vec<String> = reflections.iter().map(|r| r.embedding_text()).collect();
+    match embed::embed_batch(&texts) {
+        Ok(embeddings) => {
+            db.insert_insights_with_embeddings(&reflections, Some(&embeddings))?;
+        }
+        Err(_) => {
+            db.insert_insights(&reflections)?;
+        }
+    }
+
+    db.set_last_reflection_count(level1_count)?;
+
+    println!("\n{} reflections added:", reflections.len());
+    for r in &reflections {
+        println!("  - {}", r.title);
+    }
+
+    println!("\nTotal: {} insights for {display_name}.", db.count()?);
     Ok(())
 }
 

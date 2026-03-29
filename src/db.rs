@@ -423,6 +423,52 @@ impl IndexDb {
         Ok(())
     }
 
+    /// Get the insight count at which reflections were last generated.
+    pub fn last_reflection_count(&self) -> Result<usize> {
+        let result = self.conn.query_row(
+            "SELECT value FROM meta WHERE key = 'last_reflection_count'",
+            [],
+            |row| row.get::<_, String>(0),
+        );
+        match result {
+            Ok(s) => Ok(s.parse().unwrap_or(0)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn set_last_reflection_count(&self, count: usize) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_reflection_count', ?1)",
+            [count.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Count non-reflection insights (Level 1 only).
+    pub fn count_level1(&self) -> Result<usize> {
+        let count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM insights WHERE source_type != 'reflection'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
+    /// Delete existing reflections (before regenerating).
+    pub fn clear_reflections(&self) -> Result<usize> {
+        // Remove from FTS first.
+        self.conn.execute(
+            "DELETE FROM insights_fts WHERE rowid IN (SELECT id FROM insights WHERE source_type = 'reflection')",
+            [],
+        )?;
+        let deleted = self.conn.execute(
+            "DELETE FROM insights WHERE source_type = 'reflection'",
+            [],
+        )?;
+        Ok(deleted)
+    }
+
     pub fn count(&self) -> Result<usize> {
         let count: usize = self
             .conn
