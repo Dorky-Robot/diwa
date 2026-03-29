@@ -153,6 +153,16 @@ curl -fsSL https://raw.githubusercontent.com/Dorky-Robot/diwa/main/install.sh | 
 
 Falls back to `cargo install` if no prebuilt binary is available for your platform.
 
+### Updating
+
+Once installed, diwa can update itself:
+
+```bash
+diwa upgrade
+```
+
+diwa also checks for updates in the background and shows a hint when a newer version is available.
+
 ### Docker
 
 ```bash
@@ -184,6 +194,9 @@ diwa search <repo> "query" -n 5         Limit results
 
 diwa browse <repo>                      Scroll through insights in a TUI
 diwa stats <repo>                       Show index info
+diwa ls                                 List all indexed repos
+
+diwa upgrade                            Update diwa to the latest release
 ```
 
 The `<repo>` argument accepts a short name (`yelo`), full name (`Dorky-Robot/yelo`), or a path (`.`, `/path/to/repo`).
