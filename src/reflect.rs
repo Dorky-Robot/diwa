@@ -9,6 +9,70 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 
+/// Ask Claude whether the new insights warrant a reflection pass.
+///
+/// Returns true if Claude thinks there's enough new material for
+/// meaningful cross-cutting insights (architectural shifts, pattern
+/// changes, resolved debates, etc.).
+pub fn should_reflect(
+    new_insights: &[SearchResult],
+    existing_reflections: &[SearchResult],
+) -> bool {
+    if new_insights.is_empty() {
+        return false;
+    }
+    // Always reflect if there are no existing reflections yet.
+    if existing_reflections.is_empty() && new_insights.len() >= 3 {
+        return true;
+    }
+
+    match try_should_reflect(new_insights, existing_reflections) {
+        Ok(should) => should,
+        Err(_) => false, // If Claude is unavailable, skip.
+    }
+}
+
+fn try_should_reflect(
+    new_insights: &[SearchResult],
+    existing_reflections: &[SearchResult],
+) -> anyhow::Result<bool> {
+    let mut prompt = String::from(
+        r#"You are deciding whether a set of new development insights warrants generating deeper cross-cutting reflections.
+
+Reflections are expensive — they should only be generated when there is genuinely new material that changes the picture: an architectural shift, a pattern emerging across multiple commits, a resolved debate, a significant pivot, or a lesson that only becomes visible in retrospect.
+
+Do NOT recommend reflection for:
+- Routine bug fixes with no deeper pattern
+- Minor refactors or cleanup
+- Version bumps, CI changes, docs tweaks
+- Insights that are already covered by existing reflections
+
+EXISTING REFLECTIONS (what we already know):
+"#,
+    );
+
+    if existing_reflections.is_empty() {
+        prompt.push_str("(none yet)\n\n");
+    } else {
+        for r in existing_reflections {
+            prompt.push_str(&format!("- {}\n", r.title));
+        }
+        prompt.push('\n');
+    }
+
+    prompt.push_str("NEW INSIGHTS SINCE LAST REFLECTION:\n");
+    for r in new_insights {
+        prompt.push_str(&format!("- [{}] {}\n", r.category, r.title));
+    }
+
+    prompt.push_str(
+        "\nShould we generate new reflections? Answer ONLY \"yes\" or \"no\". Nothing else.\n",
+    );
+
+    let response = claude::prompt(&prompt)?;
+    Ok(response.trim().to_lowercase().starts_with("yes"))
+}
+
 /// Generate reflections from existing insights, grounded in repo evidence.
 pub fn generate_reflections(
     insights: &[SearchResult],

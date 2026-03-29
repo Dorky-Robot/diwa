@@ -353,48 +353,53 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
         resolved.full_name,
     );
 
-    // Reflection pass: regenerate when enough new insights have accumulated.
-    // Threshold: every 10 new Level 1 insights triggers a fresh reflection.
-    const REFLECTION_THRESHOLD: usize = 10;
+    // Reflection pass: let Claude decide if new material warrants deeper insights.
     let level1_count = db.count_level1()?;
     let last_reflection_at = db.last_reflection_count()?;
-    let due_for_reflection = level1_count >= 3
-        && (last_reflection_at == 0 || level1_count - last_reflection_at >= REFLECTION_THRESHOLD);
+    let new_insights = db.list_insights_since_count(last_reflection_at)?;
+    let existing_reflections = db.list_reflections()?;
 
-    if due_for_reflection {
-        // Clear old reflections — they'll be regenerated from all current insights.
-        let cleared = db.clear_reflections()?;
-        if cleared > 0 {
-            println!("Cleared {cleared} stale reflections.");
-        }
+    if !new_insights.is_empty() {
+        print!("Checking if new insights warrant reflection... ");
+        if reflect::should_reflect(&new_insights, &existing_reflections) {
+            println!("yes.");
 
-        let all_insights = db.list_all()?;
-        println!("Reflecting on {} insights...", all_insights.len());
-        let reflections = reflect::generate_reflections(
-            &all_insights,
-            &resolved.full_name,
-            &resolved.local_path,
-            "the indexed history",
-        );
+            let cleared = db.clear_reflections()?;
+            if cleared > 0 {
+                println!("Cleared {cleared} stale reflections.");
+            }
 
-        if !reflections.is_empty() {
-            let texts: Vec<String> = reflections.iter().map(|r| r.embedding_text()).collect();
-            match embed::embed_batch(&texts) {
-                Ok(embeddings) => {
-                    db.insert_insights_with_embeddings(&reflections, Some(&embeddings))?;
+            let all_insights = db.list_all()?;
+            println!("Reflecting on {} insights...", all_insights.len());
+            let reflections = reflect::generate_reflections(
+                &all_insights,
+                &resolved.full_name,
+                &resolved.local_path,
+                "the indexed history",
+            );
+
+            if !reflections.is_empty() {
+                let texts: Vec<String> =
+                    reflections.iter().map(|r| r.embedding_text()).collect();
+                match embed::embed_batch(&texts) {
+                    Ok(embeddings) => {
+                        db.insert_insights_with_embeddings(&reflections, Some(&embeddings))?;
+                    }
+                    Err(_) => {
+                        db.insert_insights(&reflections)?;
+                    }
                 }
-                Err(_) => {
-                    db.insert_insights(&reflections)?;
+
+                println!("{} reflections added:", reflections.len());
+                for r in &reflections {
+                    println!("  - {}", r.title);
                 }
             }
 
-            println!("{} reflections added:", reflections.len());
-            for r in &reflections {
-                println!("  - {}", r.title);
-            }
+            db.set_last_reflection_count(level1_count)?;
+        } else {
+            println!("not yet.");
         }
-
-        db.set_last_reflection_count(level1_count)?;
     }
 
     println!(

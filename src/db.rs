@@ -469,6 +469,74 @@ impl IndexDb {
         Ok(deleted)
     }
 
+    /// List only reflection insights.
+    pub fn list_reflections(&self) -> Result<Vec<SearchResult>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, commit_sha, commit_date, category, title, body,
+                    files, tags, source_type, pr_number
+             FROM insights WHERE source_type = 'reflection'
+             ORDER BY commit_date DESC",
+        )?;
+
+        let results = stmt
+            .query_map([], |row| {
+                let files_str: String = row.get(6)?;
+                let files: Vec<String> = serde_json::from_str(&files_str).unwrap_or_default();
+                Ok(SearchResult {
+                    id: row.get(0)?,
+                    commit_sha: row.get(1)?,
+                    commit_date: row.get(2)?,
+                    category: row.get(3)?,
+                    title: row.get(4)?,
+                    body: row.get(5)?,
+                    files,
+                    tags: row.get(7)?,
+                    source_type: row.get(8)?,
+                    pr_number: row.get(9)?,
+                    rank: 0.0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .context("failed to list reflections")?;
+
+        Ok(results)
+    }
+
+    /// List Level 1 insights added after a given count threshold.
+    pub fn list_insights_since_count(&self, after_count: usize) -> Result<Vec<SearchResult>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, commit_sha, commit_date, category, title, body,
+                    files, tags, source_type, pr_number
+             FROM insights
+             WHERE source_type != 'reflection'
+             ORDER BY id ASC
+             LIMIT -1 OFFSET ?1",
+        )?;
+
+        let results = stmt
+            .query_map([after_count], |row| {
+                let files_str: String = row.get(6)?;
+                let files: Vec<String> = serde_json::from_str(&files_str).unwrap_or_default();
+                Ok(SearchResult {
+                    id: row.get(0)?,
+                    commit_sha: row.get(1)?,
+                    commit_date: row.get(2)?,
+                    category: row.get(3)?,
+                    title: row.get(4)?,
+                    body: row.get(5)?,
+                    files,
+                    tags: row.get(7)?,
+                    source_type: row.get(8)?,
+                    pr_number: row.get(9)?,
+                    rank: 0.0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .context("failed to list insights since count")?;
+
+        Ok(results)
+    }
+
     pub fn count(&self) -> Result<usize> {
         let count: usize = self
             .conn
