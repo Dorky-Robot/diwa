@@ -56,10 +56,7 @@ pub fn deep_search(db: &IndexDb, query: &str, repo_path: Option<&Path>) -> Resul
     collect_results(&mut seen_results, initial_hits);
 
     // Build up a research trail — each entry is (label, content).
-    let mut trail: Vec<(String, String)> = vec![(
-        format!("search: \"{query}\""),
-        initial_text,
-    )];
+    let mut trail: Vec<(String, String)> = vec![(format!("search: \"{query}\""), initial_text)];
 
     // Now let Claude read the results and decide what to do next.
     for step_num in 1..=MAX_STEPS {
@@ -76,9 +73,9 @@ pub fn deep_search(db: &IndexDb, query: &str, repo_path: Option<&Path>) -> Resul
         match next.status.as_str() {
             "done" => {
                 spinner.stop();
-                let answer = next.answer.unwrap_or_else(|| {
-                    "Deep search completed but produced no answer.".to_string()
-                });
+                let answer = next
+                    .answer
+                    .unwrap_or_else(|| "Deep search completed but produced no answer.".to_string());
                 return Ok(append_commit_index(&answer, &seen_results));
             }
             "search" => {

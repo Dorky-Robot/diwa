@@ -65,7 +65,10 @@ Commits:
         if total_chars + entry.len() > MAX_PROMPT_CHARS {
             let header = format!(
                 "### {} by {} on {}\n{}\nFiles: {}\n(diff truncated)\n\n",
-                commit.sha, commit.author, commit.date, commit.message,
+                commit.sha,
+                commit.author,
+                commit.date,
+                commit.message,
                 commit.files.join(", "),
             );
             prompt.push_str(&header);
@@ -75,7 +78,9 @@ Commits:
         prompt.push_str(&entry);
     }
 
-    prompt.push_str("\nOutput the JSON array now. No markdown fences, no explanation, just the JSON.\n");
+    prompt.push_str(
+        "\nOutput the JSON array now. No markdown fences, no explanation, just the JSON.\n",
+    );
     prompt
 }
 
@@ -143,10 +148,7 @@ fn hydrate(raw: Vec<RawInsight>, commits: &[CommitData]) -> Vec<Insight> {
                     (c.date.clone(), st.to_string())
                 }
                 None => {
-                    let date = commits
-                        .first()
-                        .map(|c| c.date.clone())
-                        .unwrap_or_default();
+                    let date = commits.first().map(|c| c.date.clone()).unwrap_or_default();
                     (date, "git".to_string())
                 }
             };

@@ -14,7 +14,14 @@ fn make_git_repo() -> TempDir {
         .unwrap();
     // Need at least one commit for git to work properly.
     Command::new("git")
-        .args(["-C", tmp.path().to_str().unwrap(), "commit", "--allow-empty", "-m", "init"])
+        .args([
+            "-C",
+            tmp.path().to_str().unwrap(),
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+        ])
         .output()
         .unwrap();
     tmp
@@ -158,8 +165,11 @@ fn test_custom_hooks_path() {
     // Set custom hooksPath.
     Command::new("git")
         .args([
-            "-C", repo.path().to_str().unwrap(),
-            "config", "core.hooksPath", ".custom-hooks",
+            "-C",
+            repo.path().to_str().unwrap(),
+            "config",
+            "core.hooksPath",
+            ".custom-hooks",
         ])
         .output()
         .unwrap();
@@ -180,8 +190,11 @@ fn test_stale_hooks_path_fallback() {
     // Set hooksPath to a non-existent absolute path (simulates stale Docker mount).
     Command::new("git")
         .args([
-            "-C", repo.path().to_str().unwrap(),
-            "config", "core.hooksPath", "/nonexistent/stale/path/.husky",
+            "-C",
+            repo.path().to_str().unwrap(),
+            "config",
+            "core.hooksPath",
+            "/nonexistent/stale/path/.husky",
         ])
         .output()
         .unwrap();

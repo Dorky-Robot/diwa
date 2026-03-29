@@ -22,7 +22,9 @@ fn with_model<F, T>(f: F) -> Result<T>
 where
     F: FnOnce(&mut TextEmbedding) -> Result<T>,
 {
-    let mut guard = MODEL.lock().map_err(|e| anyhow::anyhow!("model lock poisoned: {e}"))?;
+    let mut guard = MODEL
+        .lock()
+        .map_err(|e| anyhow::anyhow!("model lock poisoned: {e}"))?;
     if guard.is_none() {
         let model = TextEmbedding::try_new(
             InitOptions::new(EmbeddingModel::BGESmallENV15)
@@ -41,10 +43,7 @@ pub fn embed(text: &str) -> Result<Vec<f32>> {
         let results = model
             .embed(vec![text.to_string()], None)
             .context("embedding failed")?;
-        results
-            .into_iter()
-            .next()
-            .context("empty embedding result")
+        results.into_iter().next().context("empty embedding result")
     })
 }
 

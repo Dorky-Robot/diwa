@@ -94,12 +94,8 @@ pub fn run_browse(insights: Vec<SearchResult>, repo_name: &str) -> Result<()> {
 
             // Footer
             let help_text = match (&view, wide) {
-                (_, true) | (View::List, false) => {
-                    " j/k navigate   Enter detail   q quit "
-                }
-                (View::Detail, false) => {
-                    " j/k scroll   h/Esc back   n/p prev/next   q quit "
-                }
+                (_, true) | (View::List, false) => " j/k navigate   Enter detail   q quit ",
+                (View::Detail, false) => " j/k scroll   h/Esc back   n/p prev/next   q quit ",
             };
             let help = Paragraph::new(Line::from(Span::styled(
                 help_text,
@@ -208,14 +204,8 @@ fn render_list(
             let date = r.commit_date.split('T').next().unwrap_or(&r.commit_date);
 
             let line = Line::from(vec![
-                Span::styled(
-                    format!("{} ", date),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    format!("[{}] ", r.category),
-                    Style::default().fg(color),
-                ),
+                Span::styled(format!("{} ", date), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("[{}] ", r.category), Style::default().fg(color)),
                 Span::raw(&r.title),
             ]);
 
@@ -224,11 +214,11 @@ fn render_list(
         .collect();
 
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" diwa  {}  ({}) ", repo_name, insights.len())),
-        )
+        .block(Block::default().borders(Borders::ALL).title(format!(
+            " diwa  {}  ({}) ",
+            repo_name,
+            insights.len()
+        )))
         .highlight_style(
             Style::default()
                 .add_modifier(Modifier::BOLD)

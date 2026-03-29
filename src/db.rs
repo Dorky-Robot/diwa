@@ -151,8 +151,9 @@ impl IndexDb {
             let files_json = serde_json::to_string(&insight.files)?;
             let now = chrono::Utc::now().to_rfc3339();
 
-            let embedding_bytes: Option<Vec<u8>> =
-                embeddings.and_then(|e| e.get(i)).map(|v| embedding_to_bytes(v));
+            let embedding_bytes: Option<Vec<u8>> = embeddings
+                .and_then(|e| e.get(i))
+                .map(|v| embedding_to_bytes(v));
 
             tx.execute(
                 "INSERT INTO insights (commit_sha, commit_date, category, title, body, files, tags, source_type, pr_number, embedding, created_at)
@@ -234,9 +235,9 @@ impl IndexDb {
         // JSON files arrays and allocating strings for rows we'll discard).
 
         // Pass 1: score all embeddings, keep only top-N IDs.
-        let mut stmt = self.conn.prepare(
-            "SELECT id, embedding FROM insights WHERE embedding IS NOT NULL",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, embedding FROM insights WHERE embedding IS NOT NULL")?;
 
         let mut scored: Vec<(i64, f32)> = stmt
             .query_map([], |row| {
@@ -269,27 +270,32 @@ impl IndexDb {
         );
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            scored.iter().map(|(id, _)| id as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = scored
+            .iter()
+            .map(|(id, _)| id as &dyn rusqlite::types::ToSql)
+            .collect();
 
         let mut results_map: std::collections::HashMap<i64, SearchResult> = stmt
             .query_map(params.as_slice(), |row| {
                 let id: i64 = row.get(0)?;
                 let files_str: String = row.get(6)?;
                 let files: Vec<String> = serde_json::from_str(&files_str).unwrap_or_default();
-                Ok((id, SearchResult {
+                Ok((
                     id,
-                    commit_sha: row.get(1)?,
-                    commit_date: row.get(2)?,
-                    category: row.get(3)?,
-                    title: row.get(4)?,
-                    body: row.get(5)?,
-                    files,
-                    tags: row.get(7)?,
-                    source_type: row.get(8)?,
-                    pr_number: row.get(9)?,
-                    rank: 0.0,
-                }))
+                    SearchResult {
+                        id,
+                        commit_sha: row.get(1)?,
+                        commit_date: row.get(2)?,
+                        category: row.get(3)?,
+                        title: row.get(4)?,
+                        body: row.get(5)?,
+                        files,
+                        tags: row.get(7)?,
+                        source_type: row.get(8)?,
+                        pr_number: row.get(9)?,
+                        rank: 0.0,
+                    },
+                ))
             })?
             .filter_map(|r| r.ok())
             .collect();
@@ -484,10 +490,9 @@ impl IndexDb {
             "DELETE FROM insights_fts WHERE rowid IN (SELECT id FROM insights WHERE source_type = 'reflection')",
             [],
         )?;
-        let deleted = self.conn.execute(
-            "DELETE FROM insights WHERE source_type = 'reflection'",
-            [],
-        )?;
+        let deleted = self
+            .conn
+            .execute("DELETE FROM insights WHERE source_type = 'reflection'", [])?;
         Ok(deleted)
     }
 
@@ -704,9 +709,7 @@ mod tests {
         let db = IndexDb::open_memory().unwrap();
         db.insert_insights(&[sample_insight()]).unwrap();
 
-        let results = db
-            .search_hybrid("pull-based rendering", None, 10)
-            .unwrap();
+        let results = db.search_hybrid("pull-based rendering", None, 10).unwrap();
         assert_eq!(results.len(), 1);
     }
 

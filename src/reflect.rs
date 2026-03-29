@@ -137,11 +137,7 @@ fn try_reflect(
 
 // --- Ground truth gathering ---
 
-fn gather_ground_truth(
-    repo_path: &Path,
-    repo_name: &str,
-    insights: &[SearchResult],
-) -> String {
+fn gather_ground_truth(repo_path: &Path, repo_name: &str, insights: &[SearchResult]) -> String {
     let mut ctx = String::new();
 
     if let Some(log) = git_log(repo_path) {
@@ -164,7 +160,14 @@ fn gather_ground_truth(
 
 fn git_log(repo_path: &Path) -> Option<String> {
     Command::new("git")
-        .args(["-C", &repo_path.to_string_lossy(), "log", "--oneline", "--no-merges", "-50"])
+        .args([
+            "-C",
+            &repo_path.to_string_lossy(),
+            "log",
+            "--oneline",
+            "--no-merges",
+            "-50",
+        ])
         .output()
         .ok()
         .filter(|o| o.status.success())
@@ -173,7 +176,14 @@ fn git_log(repo_path: &Path) -> Option<String> {
 
 fn file_tree(repo_path: &Path) -> Option<String> {
     Command::new("git")
-        .args(["-C", &repo_path.to_string_lossy(), "ls-tree", "--name-only", "-r", "HEAD"])
+        .args([
+            "-C",
+            &repo_path.to_string_lossy(),
+            "ls-tree",
+            "--name-only",
+            "-r",
+            "HEAD",
+        ])
         .output()
         .ok()
         .filter(|o| o.status.success())
@@ -212,8 +222,16 @@ fn pr_data(repo_name: &str) -> String {
 
     let output = Command::new("gh")
         .args([
-            "pr", "list", "--repo", repo_name, "--state", "merged",
-            "--limit", "20", "--json", "number,title,body",
+            "pr",
+            "list",
+            "--repo",
+            repo_name,
+            "--state",
+            "merged",
+            "--limit",
+            "20",
+            "--json",
+            "number,title,body",
         ])
         .output();
 
@@ -295,14 +313,25 @@ Generate 3-7 reflections. Quality over quantity. Each must be grounded in the ev
     );
 
     for (i, insight) in insights.iter().enumerate() {
-        let date = insight.commit_date.split('T').next().unwrap_or(&insight.commit_date);
+        let date = insight
+            .commit_date
+            .split('T')
+            .next()
+            .unwrap_or(&insight.commit_date);
         prompt.push_str(&format!(
             "{}. [{}] {} ({})\n   {}\n   tags: {}\n\n",
-            i + 1, insight.category, insight.title, date, insight.body, insight.tags,
+            i + 1,
+            insight.category,
+            insight.title,
+            date,
+            insight.body,
+            insight.tags,
         ));
     }
 
-    prompt.push_str("\nOutput the JSON array now. No markdown fences, no explanation, just the JSON.\n");
+    prompt.push_str(
+        "\nOutput the JSON array now. No markdown fences, no explanation, just the JSON.\n",
+    );
     prompt
 }
 
@@ -319,8 +348,14 @@ struct RawReflection {
 }
 
 fn hydrate(raw: Vec<RawReflection>, insights: &[SearchResult]) -> Vec<Insight> {
-    let fallback_sha = insights.first().map(|i| i.commit_sha.clone()).unwrap_or_default();
-    let fallback_date = insights.first().map(|i| i.commit_date.clone()).unwrap_or_default();
+    let fallback_sha = insights
+        .first()
+        .map(|i| i.commit_sha.clone())
+        .unwrap_or_default();
+    let fallback_date = insights
+        .first()
+        .map(|i| i.commit_date.clone())
+        .unwrap_or_default();
 
     raw.into_iter()
         .map(|r| {

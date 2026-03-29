@@ -42,9 +42,7 @@ pub fn list_commits(
 
     let max_count = max_commits.unwrap_or(5000).to_string();
 
-    let format = format!(
-        "{RECORD_SEP}%H{FIELD_SEP}%s%n%b{FIELD_SEP}%aI{FIELD_SEP}%an"
-    );
+    let format = format!("{RECORD_SEP}%H{FIELD_SEP}%s%n%b{FIELD_SEP}%aI{FIELD_SEP}%an");
 
     let output = Command::new("git")
         .args([
@@ -310,7 +308,9 @@ mod tests {
 
     #[test]
     fn test_batch_exact_fit() {
-        let commits: Vec<_> = (0..10).map(|i| make_commit(&format!("{i}"), "msg")).collect();
+        let commits: Vec<_> = (0..10)
+            .map(|i| make_commit(&format!("{i}"), "msg"))
+            .collect();
         let batches = batch_commits(commits, 5);
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].len(), 5);

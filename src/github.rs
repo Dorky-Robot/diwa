@@ -70,8 +70,7 @@ fn fetch_merged_prs(repo: &str, limit: usize) -> Result<Vec<PrData>> {
         return Ok(Vec::new());
     }
 
-    let parsed: Vec<serde_json::Value> =
-        serde_json::from_slice(&output.stdout).unwrap_or_default();
+    let parsed: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap_or_default();
 
     Ok(parsed
         .into_iter()

@@ -15,6 +15,7 @@ mod spinner;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 
 #[derive(Parser)]
 #[command(
@@ -112,19 +113,41 @@ pub enum Commands {
     /// Refresh hooks and reindex all registered repos
     Update,
 
+    /// List all indexed repos
+    Ls,
+
     /// Show index stats
     Stats {
         /// Repo name or path (default: current dir)
         #[arg(default_value = ".")]
         repo: String,
     },
+
+    /// Upgrade diwa to the latest release
+    Upgrade,
 }
 
 fn main() {
     let cli = Cli::parse();
+
+    // Check for updates in the background while the command runs
+    let is_upgrade = matches!(cli.command, Commands::Upgrade);
+    let update_rx = if is_upgrade {
+        None
+    } else {
+        spawn_update_check()
+    };
+
     if let Err(e) = run(cli) {
         eprintln!("Error: {e:#}");
         std::process::exit(1);
+    }
+
+    // After the command finishes, show a hint if a newer version was found
+    if let Some(rx) = update_rx {
+        if let Ok(Some(latest)) = rx.try_recv() {
+            eprintln!("\n  diwa v{latest} available — run `diwa upgrade` to update");
+        }
     }
 }
 
@@ -152,7 +175,9 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Uninit { dir } => run_uninit(&dir),
         Commands::Update => run_update(),
         Commands::Browse { repo } => run_browse(&repo),
+        Commands::Ls => run_ls(),
         Commands::Stats { repo } => run_stats(&repo),
+        Commands::Upgrade => cmd_upgrade(),
     }
 }
 
@@ -221,7 +246,11 @@ fn resolve_slug(repo_arg: &str) -> Result<String> {
         if matches.len() > 1 {
             anyhow::bail!(
                 "Ambiguous repo name '{repo_arg}'. Matches: {}",
-                matches.iter().map(|m| m.replace("--", "/")).collect::<Vec<_>>().join(", ")
+                matches
+                    .iter()
+                    .map(|m| m.replace("--", "/"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
         }
 
@@ -237,7 +266,11 @@ fn resolve_slug(repo_arg: &str) -> Result<String> {
         if fuzzy.len() > 1 {
             anyhow::bail!(
                 "Ambiguous repo name '{repo_arg}'. Did you mean one of: {}",
-                fuzzy.iter().map(|m| m.replace("--", "/")).collect::<Vec<_>>().join(", ")
+                fuzzy
+                    .iter()
+                    .map(|m| m.replace("--", "/"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
         }
     }
@@ -255,7 +288,10 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
     let db = db::IndexDb::open(&diwa, &slug)?;
 
     if reindex {
-        println!("Rebuilding index for {} from scratch...", resolved.full_name);
+        println!(
+            "Rebuilding index for {} from scratch...",
+            resolved.full_name
+        );
         db.reset()?;
     }
 
@@ -275,7 +311,11 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
         println!("Indexing {} (full history)...", resolved.full_name);
     }
 
-    let commits = git::list_commits(&resolved.local_path, since_sha.as_deref(), Some(max_commits))?;
+    let commits = git::list_commits(
+        &resolved.local_path,
+        since_sha.as_deref(),
+        Some(max_commits),
+    )?;
     let commits = git::filter_noise(commits);
 
     if commits.is_empty() {
@@ -299,7 +339,9 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
     let mut total_insights = 0;
 
     // Pipeline: while Claude processes batch N+1, embed + store batch N in a background thread.
-    let mut pending: Option<std::thread::JoinHandle<anyhow::Result<(Vec<db::Insight>, Vec<Vec<f32>>, String)>>> = None;
+    let mut pending: Option<
+        std::thread::JoinHandle<anyhow::Result<(Vec<db::Insight>, Vec<Vec<f32>>, String)>>,
+    > = None;
 
     for (i, batch) in batches.iter().enumerate() {
         print!("  Batch {}/{total_batches}...", i + 1);
@@ -327,7 +369,10 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
             let insights_clone = insights.clone();
             let sha = last_sha.clone();
             pending = Some(std::thread::spawn(move || {
-                let texts: Vec<String> = insights_clone.iter().map(|ins| ins.embedding_text()).collect();
+                let texts: Vec<String> = insights_clone
+                    .iter()
+                    .map(|ins| ins.embedding_text())
+                    .collect();
                 let embeddings = embed::embed_batch(&texts)?;
                 Ok((insights_clone, embeddings, sha))
             }));
@@ -355,8 +400,7 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
 
     println!(
         "\n{} insights indexed for {}.",
-        total_insights,
-        resolved.full_name,
+        total_insights, resolved.full_name,
     );
 
     // Reflection pass: two triggers.
@@ -374,8 +418,8 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
         .unwrap_or(i64::MAX); // Never reflected → treat as overdue.
 
     let periodic_due = days_since_reflection >= 7 && level1_count >= 3;
-    let event_driven = !new_insights.is_empty()
-        && reflect::should_reflect(&new_insights, &existing_reflections);
+    let event_driven =
+        !new_insights.is_empty() && reflect::should_reflect(&new_insights, &existing_reflections);
 
     let should_reflect = periodic_due || event_driven;
 
@@ -411,8 +455,7 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
         );
 
         if !reflections.is_empty() {
-            let texts: Vec<String> =
-                reflections.iter().map(|r| r.embedding_text()).collect();
+            let texts: Vec<String> = reflections.iter().map(|r| r.embedding_text()).collect();
             match embed::embed_batch(&texts) {
                 Ok(embeddings) => {
                     db.insert_insights_with_embeddings(&reflections, Some(&embeddings))?;
@@ -443,7 +486,13 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
     Ok(())
 }
 
-fn run_search(repo_arg: &str, query: &str, limit: usize, json_output: bool, deep: bool) -> Result<()> {
+fn run_search(
+    repo_arg: &str,
+    query: &str,
+    limit: usize,
+    json_output: bool,
+    deep: bool,
+) -> Result<()> {
     let diwa = diwa_dir();
     let slug = resolve_slug(repo_arg)?;
     let db = db::IndexDb::open(&diwa, &slug)?;
@@ -492,7 +541,10 @@ fn run_search(repo_arg: &str, query: &str, limit: usize, json_output: bool, deep
             let short_sha = r.commit_sha[..7.min(r.commit_sha.len())].to_string();
 
             // Track which results reference which commits.
-            if let Some(entry) = commit_index.iter_mut().find(|(sha, _, _)| *sha == short_sha) {
+            if let Some(entry) = commit_index
+                .iter_mut()
+                .find(|(sha, _, _)| *sha == short_sha)
+            {
                 entry.2.push(i + 1);
             } else {
                 let date = r.commit_date.split('T').next().unwrap_or(&r.commit_date);
@@ -519,7 +571,11 @@ fn run_search(repo_arg: &str, query: &str, limit: usize, json_output: bool, deep
         println!("\x1b[90mCommits:\x1b[0m");
         for (sha, date, refs) in &commit_index {
             let ref_list: Vec<String> = refs.iter().map(|r| format!("[{r}]")).collect();
-            println!("  \x1b[90m{sha}  {}  cited by {}\x1b[0m", date, ref_list.join(" "));
+            println!(
+                "  \x1b[90m{sha}  {}  cited by {}\x1b[0m",
+                date,
+                ref_list.join(" ")
+            );
         }
     }
 
@@ -545,11 +601,18 @@ fn run_reflect(repo_arg: &str) -> Result<()> {
     }
 
     let all_insights = db.list_all()?;
-    println!("Reflecting on {} insights for {display_name}...", all_insights.len());
+    println!(
+        "Reflecting on {} insights for {display_name}...",
+        all_insights.len()
+    );
 
     // Try to get repo path for ground truth. Works if repo_arg is a path or cwd.
     let repo_path = if repo_arg.starts_with('.') || repo_arg.starts_with('/') {
-        Some(std::path::PathBuf::from(repo_arg).canonicalize().unwrap_or_default())
+        Some(
+            std::path::PathBuf::from(repo_arg)
+                .canonicalize()
+                .unwrap_or_default(),
+        )
     } else {
         // Try resolving from cwd.
         repo::resolve_repo(std::path::Path::new("."))
@@ -684,6 +747,50 @@ fn run_browse(repo_arg: &str) -> Result<()> {
     browse::run_browse(insights, &display_name)
 }
 
+fn run_ls() -> Result<()> {
+    let diwa = diwa_dir();
+    let repos = manifest::read_manifest(&diwa);
+
+    if repos.is_empty() {
+        println!("No indexed repos. Run `diwa init` in a git repo to get started.");
+        return Ok(());
+    }
+
+    let mut entries: Vec<_> = repos.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let shorten = |p: &Path| -> String {
+        let s = p.display().to_string();
+        if !home.is_empty() {
+            if let Some(rest) = s.strip_prefix(&home) {
+                return format!("~{rest}");
+            }
+        }
+        s
+    };
+
+    for (slug, path) in &entries {
+        let display = slug.replace("--", "/");
+        let db_path = diwa.join(slug).join("index.db");
+        let count = if db_path.exists() {
+            db::IndexDb::open(&diwa, slug)
+                .and_then(|db| db.count())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        println!(
+            "  {display}  \x1b[90m{} insights  {}\x1b[0m",
+            count,
+            shorten(path)
+        );
+    }
+
+    println!("\n{} repos indexed.", entries.len());
+    Ok(())
+}
+
 fn run_stats(repo_arg: &str) -> Result<()> {
     let diwa = diwa_dir();
     let slug = resolve_slug(repo_arg)?;
@@ -698,14 +805,223 @@ fn run_stats(repo_arg: &str) -> Result<()> {
     println!("diwa index for {}", display_name);
     println!("  Insights:      {total}");
     println!("  With vectors:  {with_embeddings}");
-    println!(
-        "  Last indexed:  {}",
-        &last_sha[..7.min(last_sha.len())]
-    );
-    println!(
-        "  Database:      {}/{slug}/index.db",
-        diwa.display()
-    );
+    println!("  Last indexed:  {}", &last_sha[..7.min(last_sha.len())]);
+    println!("  Database:      {}/{slug}/index.db", diwa.display());
 
     Ok(())
+}
+
+/// Spawn a background thread to check for a newer diwa release.
+/// Returns a receiver that yields `Some(latest_version)` if an update is
+/// available, or `None` if already current. Skipped if checked within 24h.
+fn spawn_update_check() -> Option<mpsc::Receiver<Option<String>>> {
+    let cache_dir = cache_dir();
+    let cache_file = cache_dir.join("update-check");
+
+    // Rate-limit: skip if checked within the last 24 hours
+    let cache_fresh = std::fs::metadata(&cache_file)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|e| e < std::time::Duration::from_secs(86400));
+
+    if cache_fresh {
+        if let Ok(cached) = std::fs::read_to_string(&cache_file) {
+            let latest = cached.trim().to_string();
+            let current = env!("CARGO_PKG_VERSION");
+            if !latest.is_empty() && latest != current {
+                let (tx, rx) = mpsc::channel();
+                let _ = tx.send(Some(latest));
+                return Some(rx);
+            }
+        }
+        return None;
+    }
+
+    let (tx, rx) = mpsc::channel();
+
+    std::thread::spawn(move || {
+        let result = (|| -> Option<String> {
+            let output = std::process::Command::new("curl")
+                .args([
+                    "-fsSL",
+                    "--connect-timeout",
+                    "3",
+                    "--max-time",
+                    "5",
+                    "https://api.github.com/repos/Dorky-Robot/diwa/releases/latest",
+                ])
+                .output()
+                .ok()?;
+
+            if !output.status.success() {
+                return None;
+            }
+
+            let body = String::from_utf8_lossy(&output.stdout);
+            let tag = body
+                .lines()
+                .find(|l| l.contains("\"tag_name\""))
+                .and_then(|l| l.split('"').nth(3))?;
+
+            let latest = tag.strip_prefix('v').unwrap_or(tag).to_string();
+
+            // Cache the result
+            let _ = std::fs::create_dir_all(&cache_dir);
+            let _ = std::fs::write(&cache_file, &latest);
+
+            let current = env!("CARGO_PKG_VERSION");
+            if latest != current {
+                Some(latest)
+            } else {
+                None
+            }
+        })();
+
+        let _ = tx.send(result);
+    });
+
+    Some(rx)
+}
+
+fn cache_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    PathBuf::from(home).join(".cache").join("diwa")
+}
+
+fn cmd_upgrade() -> Result<()> {
+    let current = env!("CARGO_PKG_VERSION");
+
+    eprintln!("Checking for updates...");
+    let output = std::process::Command::new("curl")
+        .args([
+            "-fsSL",
+            "https://api.github.com/repos/Dorky-Robot/diwa/releases/latest",
+        ])
+        .output()?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        "failed to check for updates — could not reach GitHub"
+    );
+
+    let body = String::from_utf8_lossy(&output.stdout);
+    let tag = body
+        .lines()
+        .find(|l| l.contains("\"tag_name\""))
+        .and_then(|l| l.split('"').nth(3))
+        .ok_or_else(|| anyhow::anyhow!("could not parse latest release tag"))?
+        .to_string();
+
+    let latest = tag.strip_prefix('v').unwrap_or(&tag);
+
+    if latest == current {
+        eprintln!("Already on the latest version (v{current}).");
+        return Ok(());
+    }
+
+    eprintln!("Upgrading v{current} → v{latest}...");
+
+    // Detect platform
+    let arch = std::env::consts::ARCH;
+    let os = std::env::consts::OS;
+
+    let target = match (arch, os) {
+        ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
+        ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
+        ("aarch64", "macos") => "aarch64-apple-darwin",
+        _ => anyhow::bail!("unsupported platform: {arch}-{os}"),
+    };
+
+    let url =
+        format!("https://github.com/Dorky-Robot/diwa/releases/download/{tag}/diwa-{target}.tar.gz");
+
+    // Download and extract to temp dir
+    let tmpdir = std::env::temp_dir().join(format!("diwa-upgrade-{}", std::process::id()));
+    std::fs::create_dir_all(&tmpdir)?;
+
+    let tarball = tmpdir.join("diwa.tar.gz");
+    let dl = std::process::Command::new("curl")
+        .args(["-fsSL", &url, "-o"])
+        .arg(&tarball)
+        .status()?;
+
+    if !dl.success() {
+        std::fs::remove_dir_all(&tmpdir).ok();
+        anyhow::bail!("failed to download {url}");
+    }
+
+    let extract = std::process::Command::new("tar")
+        .args(["xzf"])
+        .arg(&tarball)
+        .arg("-C")
+        .arg(&tmpdir)
+        .status()?;
+
+    if !extract.success() {
+        std::fs::remove_dir_all(&tmpdir).ok();
+        anyhow::bail!("failed to extract archive");
+    }
+
+    // diwa archives contain the binary directly (no subdirectory)
+    let extracted = tmpdir.join("diwa");
+    if !extracted.exists() {
+        std::fs::remove_dir_all(&tmpdir).ok();
+        anyhow::bail!("diwa binary not found in archive");
+    }
+
+    // Replace current binary
+    let current_exe = std::env::current_exe()?;
+    let install_dir = current_exe
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("could not determine install directory"))?;
+
+    let dest = install_dir.join("diwa");
+    let needs_sudo = !is_writable(&dest);
+
+    if needs_sudo {
+        eprintln!("Installing to {} (requires sudo)...", install_dir.display());
+        let cp = std::process::Command::new("sudo")
+            .args(["cp", "-f"])
+            .arg(&extracted)
+            .arg(&dest)
+            .status()?;
+
+        anyhow::ensure!(cp.success(), "failed to install binary (sudo cp failed)");
+
+        std::process::Command::new("sudo")
+            .args(["chmod", "+x"])
+            .arg(&dest)
+            .status()?;
+    } else {
+        std::fs::copy(&extracted, &dest)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+
+    std::fs::remove_dir_all(&tmpdir).ok();
+    eprintln!("Upgraded to v{latest}.");
+    Ok(())
+}
+
+/// Check if a path is writable by the current user.
+fn is_writable(path: &Path) -> bool {
+    if path.exists() {
+        return std::fs::OpenOptions::new().write(true).open(path).is_ok();
+    }
+    path.parent().is_some_and(|p| {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(p.join(".diwa-write-test"))
+            .map(|_| {
+                std::fs::remove_file(p.join(".diwa-write-test")).ok();
+                true
+            })
+            .unwrap_or(false)
+    })
 }
