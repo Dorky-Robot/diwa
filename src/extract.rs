@@ -1,18 +1,15 @@
 //! Extract structured insights from commits using the `claude` CLI.
 
-use crate::git::CommitData;
+use crate::claude;
 use crate::db::Insight;
-use anyhow::{Context, Result};
-use std::io::Write;
-use std::process::Command;
+use crate::git::CommitData;
 
 /// Maximum total prompt size (chars) sent to claude per batch.
 const MAX_PROMPT_CHARS: usize = 12_000;
 
 /// Extract insights from a batch of commits using `claude -p`.
 ///
-/// Returns a Vec of insights. On failure (claude not available, malformed output),
-/// returns an empty vec and prints a warning rather than failing the whole indexing run.
+/// On failure, returns an empty vec and prints a warning.
 pub fn extract_insights(commits: &[CommitData]) -> Vec<Insight> {
     match try_extract(commits) {
         Ok(insights) => insights,
@@ -26,37 +23,15 @@ pub fn extract_insights(commits: &[CommitData]) -> Vec<Insight> {
     }
 }
 
-fn try_extract(commits: &[CommitData]) -> Result<Vec<Insight>> {
+fn try_extract(commits: &[CommitData]) -> anyhow::Result<Vec<Insight>> {
     if commits.is_empty() {
         return Ok(Vec::new());
     }
 
     let prompt = build_prompt(commits);
-
-    // Shell out to `claude -p` (print mode, no interactive session).
-    let mut child = Command::new("claude")
-        .args(["-p", "--output-format", "text"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .context("failed to run claude CLI — is it installed?")?;
-
-    child
-        .stdin
-        .as_mut()
-        .context("failed to open claude stdin")?
-        .write_all(prompt.as_bytes())?;
-
-    let output = child.wait_with_output().context("claude process failed")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("claude exited with error: {stderr}");
-    }
-
-    let response = String::from_utf8_lossy(&output.stdout).to_string();
-    parse_insights(&response, commits)
+    let response = claude::prompt(&prompt)?;
+    let raw: Vec<RawInsight> = claude::parse_json_array(&response)?;
+    Ok(hydrate(raw, commits))
 }
 
 fn build_prompt(commits: &[CommitData]) -> String {
@@ -88,14 +63,9 @@ Commits:
     for commit in commits {
         let entry = format_commit(commit);
         if total_chars + entry.len() > MAX_PROMPT_CHARS {
-            // Truncate this entry's diff portion.
             let header = format!(
-                "### {} ({}) by {} on {}\n{}\nFiles: {}\n(diff truncated)\n\n",
-                commit.sha,
-                commit.date,
-                commit.author,
-                commit.date,
-                commit.message,
+                "### {} by {} on {}\n{}\nFiles: {}\n(diff truncated)\n\n",
+                commit.sha, commit.author, commit.date, commit.message,
                 commit.files.join(", "),
             );
             prompt.push_str(&header);
@@ -149,37 +119,6 @@ fn format_commit(commit: &CommitData) -> String {
     entry
 }
 
-/// Parse Claude's response into Insight structs.
-///
-/// Tries direct JSON parse first, then looks for JSON inside markdown fences.
-fn parse_insights(response: &str, commits: &[CommitData]) -> Result<Vec<Insight>> {
-    let trimmed = response.trim();
-
-    // Try direct parse.
-    if let Ok(raw) = serde_json::from_str::<Vec<RawInsight>>(trimmed) {
-        return Ok(hydrate(raw, commits));
-    }
-
-    // Try extracting from markdown code fences.
-    if let Some(json_str) = extract_json_from_fences(trimmed) {
-        if let Ok(raw) = serde_json::from_str::<Vec<RawInsight>>(&json_str) {
-            return Ok(hydrate(raw, commits));
-        }
-    }
-
-    // Try finding a JSON array anywhere in the response.
-    if let Some(start) = trimmed.find('[') {
-        if let Some(end) = trimmed.rfind(']') {
-            let slice = &trimmed[start..=end];
-            if let Ok(raw) = serde_json::from_str::<Vec<RawInsight>>(slice) {
-                return Ok(hydrate(raw, commits));
-            }
-        }
-    }
-
-    anyhow::bail!("could not parse insights from claude response")
-}
-
 #[derive(serde::Deserialize)]
 struct RawInsight {
     commit_sha: Option<String>,
@@ -193,28 +132,22 @@ struct RawInsight {
 fn hydrate(raw: Vec<RawInsight>, commits: &[CommitData]) -> Vec<Insight> {
     raw.into_iter()
         .map(|r| {
-            // Find the matching commit for date and source_type.
             let matching_commit = r
                 .commit_sha
                 .as_deref()
                 .and_then(|sha| commits.iter().find(|c| c.sha.starts_with(sha)));
 
-            let (date, source_type, pr_number) = match matching_commit {
+            let (date, source_type) = match matching_commit {
                 Some(c) => {
-                    let st = if c.pr_body.is_some() {
-                        "git+gh"
-                    } else {
-                        "git"
-                    };
-                    let pr = c.pr_body.as_ref().and(None); // PR number set by github enrichment
-                    (c.date.clone(), st.to_string(), pr)
+                    let st = if c.pr_body.is_some() { "git+gh" } else { "git" };
+                    (c.date.clone(), st.to_string())
                 }
                 None => {
                     let date = commits
                         .first()
                         .map(|c| c.date.clone())
                         .unwrap_or_default();
-                    ("git".to_string(), date, None)
+                    (date, "git".to_string())
                 }
             };
 
@@ -229,24 +162,10 @@ fn hydrate(raw: Vec<RawInsight>, commits: &[CommitData]) -> Vec<Insight> {
                 files: r.files.unwrap_or_default(),
                 tags: r.tags.unwrap_or_default(),
                 source_type,
-                pr_number,
+                pr_number: None,
             }
         })
         .collect()
-}
-
-fn extract_json_from_fences(text: &str) -> Option<String> {
-    let start_markers = ["```json\n", "```json\r\n", "```\n", "```\r\n"];
-
-    for marker in &start_markers {
-        if let Some(start) = text.find(marker) {
-            let json_start = start + marker.len();
-            if let Some(end) = text[json_start..].find("```") {
-                return Some(text[json_start..json_start + end].to_string());
-            }
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -268,31 +187,53 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_clean_json() {
-        let response = r#"[{"commit_sha":"abc1234","category":"decision","title":"Adopted pull-based rendering","body":"Switched to avoid race conditions.","files":["lib/pull-manager.js"],"tags":"rendering"}]"#;
-
-        let results = parse_insights(response, &dummy_commits()).unwrap();
+    fn test_hydrate_with_matching_commit() {
+        let raw = vec![RawInsight {
+            commit_sha: Some("abc1234".into()),
+            category: Some("decision".into()),
+            title: "Test".into(),
+            body: "Body".into(),
+            files: Some(vec!["a.rs".into()]),
+            tags: Some("test".into()),
+        }];
+        let results = hydrate(raw, &dummy_commits());
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].title, "Adopted pull-based rendering");
+        assert_eq!(results[0].source_type, "git");
+        assert!(results[0].pr_number.is_none());
     }
 
     #[test]
-    fn test_parse_fenced_json() {
-        let response = "Here are the insights:\n```json\n[{\"title\":\"Test\",\"body\":\"Body\"}]\n```\n";
-        let results = parse_insights(response, &dummy_commits()).unwrap();
+    fn test_hydrate_without_matching_commit() {
+        let raw = vec![RawInsight {
+            commit_sha: Some("zzz0000".into()),
+            category: None,
+            title: "Test".into(),
+            body: "Body".into(),
+            files: None,
+            tags: None,
+        }];
+        let results = hydrate(raw, &dummy_commits());
         assert_eq!(results.len(), 1);
+        assert_eq!(results[0].category, "learning");
+        assert!(results[0].files.is_empty());
     }
 
     #[test]
-    fn test_parse_json_with_preamble() {
-        let response = "I found these insights:\n\n[{\"title\":\"Test\",\"body\":\"Body\"}]";
-        let results = parse_insights(response, &dummy_commits()).unwrap();
-        assert_eq!(results.len(), 1);
-    }
-
-    #[test]
-    fn test_parse_garbage_fails() {
-        let response = "I don't know what to say";
-        assert!(parse_insights(response, &dummy_commits()).is_err());
+    fn test_format_commit_with_pr() {
+        let commit = CommitData {
+            sha: "abc".into(),
+            message: "feat: thing".into(),
+            diff: String::new(),
+            date: "2026-01-01".into(),
+            author: "dev".into(),
+            files: vec!["a.rs".into()],
+            pr_title: Some("Add thing (#42)".into()),
+            pr_body: Some("This PR adds thing.".into()),
+            review_comments: Some(vec!["Looks good".into()]),
+        };
+        let formatted = format_commit(&commit);
+        assert!(formatted.contains("PR: Add thing"));
+        assert!(formatted.contains("PR body:"));
+        assert!(formatted.contains("Review comment 1:"));
     }
 }

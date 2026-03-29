@@ -3,20 +3,17 @@
 //! Level 1: per-commit insights (what happened, why)
 //! Level 2: reflections across many commits (patterns, arcs, journey)
 
+use crate::claude;
 use crate::db::{Insight, SearchResult};
-use anyhow::{Context, Result};
-use std::io::Write;
+use std::collections::HashSet;
+use std::path::Path;
 use std::process::Command;
 
-/// Generate reflections from a set of existing insights.
-///
-/// Reads all Level 1 insights, gathers ground truth from the repo
-/// (actual file contents, git log, PR data), and asks Claude to
-/// reflect — but only on things it can verify from the code.
+/// Generate reflections from existing insights, grounded in repo evidence.
 pub fn generate_reflections(
     insights: &[SearchResult],
     repo_name: &str,
-    repo_path: &std::path::Path,
+    repo_path: &Path,
     period: &str,
 ) -> Vec<Insight> {
     match try_reflect(insights, repo_name, repo_path, period) {
@@ -31,148 +28,128 @@ pub fn generate_reflections(
 fn try_reflect(
     insights: &[SearchResult],
     repo_name: &str,
-    repo_path: &std::path::Path,
+    repo_path: &Path,
     period: &str,
-) -> Result<Vec<Insight>> {
+) -> anyhow::Result<Vec<Insight>> {
     if insights.is_empty() {
         return Ok(Vec::new());
     }
 
-    let ground_truth = gather_ground_truth(repo_path, insights);
+    let ground_truth = gather_ground_truth(repo_path, repo_name, insights);
     let prompt = build_prompt(insights, repo_name, period, &ground_truth);
-
-    let mut child = Command::new("claude")
-        .args(["-p", "--output-format", "text"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .context("failed to run claude CLI")?;
-
-    child
-        .stdin
-        .as_mut()
-        .context("failed to open claude stdin")?
-        .write_all(prompt.as_bytes())?;
-
-    let output = child.wait_with_output().context("claude process failed")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("claude exited with error: {stderr}");
-    }
-
-    let response = String::from_utf8_lossy(&output.stdout).to_string();
-    parse_reflections(&response, insights)
+    let response = claude::prompt(&prompt)?;
+    let raw: Vec<RawReflection> = claude::parse_json_array(&response)?;
+    Ok(hydrate(raw, insights))
 }
 
-/// Gather ground truth from the repo to verify reflections against.
+// --- Ground truth gathering ---
+
 fn gather_ground_truth(
-    repo_path: &std::path::Path,
+    repo_path: &Path,
+    repo_name: &str,
     insights: &[SearchResult],
 ) -> String {
-    let mut context = String::new();
+    let mut ctx = String::new();
 
-    // Git log summary: the actual commit sequence
-    if let Ok(output) = std::process::Command::new("git")
-        .args([
-            "-C",
-            &repo_path.to_string_lossy(),
-            "log",
-            "--oneline",
-            "--no-merges",
-            "-50",
-        ])
-        .output()
-    {
-        if output.status.success() {
-            let log = String::from_utf8_lossy(&output.stdout);
-            context.push_str("ACTUAL GIT LOG (most recent 50 commits):\n");
-            context.push_str(&log);
-            context.push_str("\n\n");
-        }
+    if let Some(log) = git_log(repo_path) {
+        ctx.push_str("ACTUAL GIT LOG (most recent 50 commits):\n");
+        ctx.push_str(&log);
+        ctx.push_str("\n\n");
     }
 
-    // Current file tree (top-level structure)
-    if let Ok(output) = std::process::Command::new("git")
-        .args([
-            "-C",
-            &repo_path.to_string_lossy(),
-            "ls-tree",
-            "--name-only",
-            "-r",
-            "HEAD",
-        ])
-        .output()
-    {
-        if output.status.success() {
-            let tree = String::from_utf8_lossy(&output.stdout);
-            // Truncate to avoid blowing up prompt
-            let truncated: String = tree.lines().take(100).collect::<Vec<_>>().join("\n");
-            context.push_str("CURRENT FILE TREE:\n");
-            context.push_str(&truncated);
-            context.push_str("\n\n");
-        }
+    if let Some(tree) = file_tree(repo_path) {
+        ctx.push_str("CURRENT FILE TREE:\n");
+        ctx.push_str(&tree);
+        ctx.push_str("\n\n");
     }
 
-    // Key files referenced in insights — read a snippet of each
-    let mut seen_files = std::collections::HashSet::new();
-    for insight in insights {
-        for file in &insight.files {
-            if seen_files.contains(file.as_str()) || seen_files.len() >= 10 {
-                continue;
-            }
-            seen_files.insert(file.as_str());
-            let full_path = repo_path.join(file);
-            if let Ok(content) = std::fs::read_to_string(&full_path) {
-                let snippet: String = content.lines().take(30).collect::<Vec<_>>().join("\n");
-                context.push_str(&format!("FILE: {file} (first 30 lines):\n{snippet}\n\n"));
-            }
-        }
-    }
+    ctx.push_str(&file_snippets(repo_path, insights));
+    ctx.push_str(&pr_data(repo_name));
 
-    // PR data if gh is available
-    if crate::github::gh_available() {
-        if let Ok(output) = std::process::Command::new("gh")
-            .args([
-                "pr",
-                "list",
-                "--repo",
-                &format!(
-                    "{}",
-                    repo_path
-                        .to_string_lossy()
-                ),
-                "--state",
-                "merged",
-                "--limit",
-                "20",
-                "--json",
-                "number,title,body",
-            ])
-            .output()
-        {
-            if output.status.success() {
-                let prs = String::from_utf8_lossy(&output.stdout);
-                if prs.len() > 10 {
-                    // Truncate PR data
-                    let truncated = if prs.len() > 3000 {
-                        format!("{}...", &prs[..3000])
-                    } else {
-                        prs.to_string()
-                    };
-                    context.push_str("MERGED PRs (from GitHub):\n");
-                    context.push_str(&truncated);
-                    context.push_str("\n\n");
-                }
-            }
-        }
-    }
-
-    context
+    ctx
 }
 
-fn build_prompt(insights: &[SearchResult], repo_name: &str, period: &str, ground_truth: &str) -> String {
+fn git_log(repo_path: &Path) -> Option<String> {
+    Command::new("git")
+        .args(["-C", &repo_path.to_string_lossy(), "log", "--oneline", "--no-merges", "-50"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+}
+
+fn file_tree(repo_path: &Path) -> Option<String> {
+    Command::new("git")
+        .args(["-C", &repo_path.to_string_lossy(), "ls-tree", "--name-only", "-r", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .take(100)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+}
+
+fn file_snippets(repo_path: &Path, insights: &[SearchResult]) -> String {
+    let mut ctx = String::new();
+    let mut seen = HashSet::new();
+
+    for insight in insights {
+        for file in &insight.files {
+            if !seen.insert(file.as_str()) || seen.len() > 10 {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(repo_path.join(file)) {
+                let snippet: String = content.lines().take(30).collect::<Vec<_>>().join("\n");
+                ctx.push_str(&format!("FILE: {file} (first 30 lines):\n{snippet}\n\n"));
+            }
+        }
+    }
+
+    ctx
+}
+
+fn pr_data(repo_name: &str) -> String {
+    if !crate::github::gh_available() {
+        return String::new();
+    }
+
+    let output = Command::new("gh")
+        .args([
+            "pr", "list", "--repo", repo_name, "--state", "merged",
+            "--limit", "20", "--json", "number,title,body",
+        ])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            let prs = String::from_utf8_lossy(&o.stdout);
+            if prs.len() > 10 {
+                let truncated = if prs.len() > 3000 {
+                    format!("{}...", &prs[..3000])
+                } else {
+                    prs.to_string()
+                };
+                format!("MERGED PRs (from GitHub):\n{truncated}\n\n")
+            } else {
+                String::new()
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+// --- Prompt building ---
+
+fn build_prompt(
+    insights: &[SearchResult],
+    repo_name: &str,
+    period: &str,
+    ground_truth: &str,
+) -> String {
     let mut prompt = format!(
         r#"You are reflecting on the development history of {repo_name} over {period}. Below are individual insights extracted from commits, PLUS ground truth data from the actual repository (git log, file tree, file contents, PRs).
 
@@ -212,19 +189,10 @@ Generate 3-7 reflections. Quality over quantity. Each must be grounded in the ev
     );
 
     for (i, insight) in insights.iter().enumerate() {
-        let date = insight
-            .commit_date
-            .split('T')
-            .next()
-            .unwrap_or(&insight.commit_date);
+        let date = insight.commit_date.split('T').next().unwrap_or(&insight.commit_date);
         prompt.push_str(&format!(
             "{}. [{}] {} ({})\n   {}\n   tags: {}\n\n",
-            i + 1,
-            insight.category,
-            insight.title,
-            date,
-            insight.body,
-            insight.tags,
+            i + 1, insight.category, insight.title, date, insight.body, insight.tags,
         ));
     }
 
@@ -232,33 +200,7 @@ Generate 3-7 reflections. Quality over quantity. Each must be grounded in the ev
     prompt
 }
 
-fn parse_reflections(response: &str, insights: &[SearchResult]) -> Result<Vec<Insight>> {
-    let trimmed = response.trim();
-
-    // Try direct parse.
-    if let Ok(raw) = serde_json::from_str::<Vec<RawReflection>>(trimmed) {
-        return Ok(hydrate(raw, insights));
-    }
-
-    // Try extracting from markdown fences.
-    if let Some(json_str) = extract_json_from_fences(trimmed) {
-        if let Ok(raw) = serde_json::from_str::<Vec<RawReflection>>(&json_str) {
-            return Ok(hydrate(raw, insights));
-        }
-    }
-
-    // Try finding JSON array anywhere.
-    if let Some(start) = trimmed.find('[') {
-        if let Some(end) = trimmed.rfind(']') {
-            let slice = &trimmed[start..=end];
-            if let Ok(raw) = serde_json::from_str::<Vec<RawReflection>>(slice) {
-                return Ok(hydrate(raw, insights));
-            }
-        }
-    }
-
-    anyhow::bail!("could not parse reflections from claude response")
-}
+// --- Parsing ---
 
 #[derive(serde::Deserialize)]
 struct RawReflection {
@@ -271,14 +213,8 @@ struct RawReflection {
 }
 
 fn hydrate(raw: Vec<RawReflection>, insights: &[SearchResult]) -> Vec<Insight> {
-    let fallback_sha = insights
-        .first()
-        .map(|i| i.commit_sha.clone())
-        .unwrap_or_default();
-    let fallback_date = insights
-        .first()
-        .map(|i| i.commit_date.clone())
-        .unwrap_or_default();
+    let fallback_sha = insights.first().map(|i| i.commit_sha.clone()).unwrap_or_default();
+    let fallback_date = insights.first().map(|i| i.commit_date.clone()).unwrap_or_default();
 
     raw.into_iter()
         .map(|r| {
@@ -302,17 +238,4 @@ fn hydrate(raw: Vec<RawReflection>, insights: &[SearchResult]) -> Vec<Insight> {
             }
         })
         .collect()
-}
-
-fn extract_json_from_fences(text: &str) -> Option<String> {
-    let start_markers = ["```json\n", "```json\r\n", "```\n", "```\r\n"];
-    for marker in &start_markers {
-        if let Some(start) = text.find(marker) {
-            let json_start = start + marker.len();
-            if let Some(end) = text[json_start..].find("```") {
-                return Some(text[json_start..json_start + end].to_string());
-            }
-        }
-    }
-    None
 }

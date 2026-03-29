@@ -1,11 +1,12 @@
 mod browse;
+mod claude;
 mod db;
 mod deep_search;
 mod embed;
-mod install;
 mod extract;
 mod git;
 mod github;
+mod install;
 mod reflect;
 mod repo;
 
