@@ -10,6 +10,7 @@ mod install;
 mod manifest;
 mod reflect;
 mod repo;
+mod spinner;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -447,9 +448,15 @@ fn run_search(repo_arg: &str, query: &str, limit: usize, json_output: bool, deep
     let slug = resolve_slug(repo_arg)?;
     let db = db::IndexDb::open(&diwa, &slug)?;
 
-    // Deep search: Claude drives retrieval and synthesizes an answer.
+    // Deep search: agentic research loop — Claude plans, investigates, synthesizes.
     if deep {
-        let answer = deep_search::deep_search(&db, query)?;
+        // Try to resolve repo path for git/file access.
+        let repo_path = manifest::read_manifest(&diwa)
+            .get(&slug)
+            .cloned()
+            .filter(|p| p.exists());
+
+        let answer = deep_search::deep_search(&db, query, repo_path.as_deref())?;
         println!("{answer}");
         return Ok(());
     }
