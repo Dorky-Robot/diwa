@@ -7,6 +7,7 @@ mod extract;
 mod git;
 mod github;
 mod install;
+mod manifest;
 mod reflect;
 mod repo;
 
@@ -107,6 +108,9 @@ pub enum Commands {
         dir: PathBuf,
     },
 
+    /// Update diwa binary and refresh all indexed repos
+    Update,
+
     /// Show index stats
     Stats {
         /// Repo name or path (default: current dir)
@@ -145,6 +149,7 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Reflect { repo } => run_reflect(&repo),
         Commands::Init { dir } => run_init(&dir),
         Commands::Uninit { dir } => run_uninit(&dir),
+        Commands::Update => run_update(),
         Commands::Browse { repo } => run_browse(&repo),
         Commands::Stats { repo } => run_stats(&repo),
     }
@@ -592,6 +597,11 @@ fn run_init(dir: &Path) -> Result<()> {
     // Install the hook.
     install::install_hook(&dir)?;
 
+    // Register in manifest so `diwa update` can find it.
+    let resolved = repo::resolve_repo(&dir)?;
+    let slug = format!("{}--{}", resolved.owner, resolved.name);
+    manifest::register_repo(&diwa_dir(), &slug, &dir)?;
+
     // Run initial index.
     println!("\nRunning initial index...");
     run_index(&dir, 5000, 8, false)?;
@@ -602,7 +612,71 @@ fn run_init(dir: &Path) -> Result<()> {
 
 fn run_uninit(dir: &Path) -> Result<()> {
     let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-    install::uninstall_hook(&dir)
+    install::uninstall_hook(&dir)?;
+
+    // Unregister from manifest.
+    if let Ok(resolved) = repo::resolve_repo(&dir) {
+        let slug = format!("{}--{}", resolved.owner, resolved.name);
+        let _ = manifest::unregister_repo(&diwa_dir(), &slug);
+    }
+
+    Ok(())
+}
+
+fn run_update() -> Result<()> {
+    let diwa = diwa_dir();
+
+    // Step 1: Update the binary.
+    println!("Updating diwa...");
+    let brew_result = std::process::Command::new("brew")
+        .args(["upgrade", "diwa"])
+        .status();
+
+    match brew_result {
+        Ok(s) if s.success() => println!("Binary updated via brew."),
+        _ => {
+            println!("brew upgrade not available or failed — skipping binary update.");
+            println!("Update manually: brew upgrade diwa, or cargo install --path .");
+        }
+    }
+
+    // Step 2: Refresh hooks and index for all registered repos.
+    let repos = manifest::read_manifest(&diwa);
+
+    if repos.is_empty() {
+        println!("\nNo repos registered. Run `diwa init` in a repo first.");
+        return Ok(());
+    }
+
+    println!("\nUpdating {} registered repos:\n", repos.len());
+
+    for (slug, path) in &repos {
+        let display = slug.replace("--", "/");
+        print!("  {display}... ");
+
+        if !path.exists() {
+            println!("path not found ({}), skipping.", path.display());
+            continue;
+        }
+
+        // Refresh the hook (picks up any changes to the hook script).
+        match install::install_hook(path) {
+            Ok(_) => {}
+            Err(e) => {
+                println!("hook update failed ({e}), skipping.");
+                continue;
+            }
+        }
+
+        // Run incremental index (picks up new commits + latest prompts).
+        match run_index(path, 5000, 8, false) {
+            Ok(_) => println!("done."),
+            Err(e) => println!("index failed ({e})."),
+        }
+    }
+
+    println!("\nAll repos updated.");
+    Ok(())
 }
 
 fn run_browse(repo_arg: &str) -> Result<()> {
