@@ -100,7 +100,8 @@ pub fn uninstall_hook(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn find_hooks_dir(repo_path: &Path) -> Result<std::path::PathBuf> {
+/// Exposed for testing.
+pub fn find_hooks_dir(repo_path: &Path) -> Result<std::path::PathBuf> {
     // Check for custom hooksPath (e.g. .husky).
     let output = std::process::Command::new("git")
         .args([

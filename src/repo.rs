@@ -175,4 +175,36 @@ mod tests {
             Some(("owner".to_string(), "repo".to_string()))
         );
     }
+
+    #[test]
+    fn parse_ssh_custom_alias() {
+        // Custom SSH config alias: git@github.com-dorkyrobot:owner/repo.git
+        assert_eq!(
+            parse_github_remote("git@github.com-dorkyrobot:Dorky-Robot/katulong.git"),
+            Some(("Dorky-Robot".to_string(), "katulong".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_ssh_custom_alias_no_suffix() {
+        assert_eq!(
+            parse_github_remote("git@github.com-work:owner/repo"),
+            Some(("owner".to_string(), "repo".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_non_github_ssh() {
+        assert_eq!(parse_github_remote("git@gitlab.com:owner/repo.git"), None);
+    }
+
+    #[test]
+    fn parse_empty_owner() {
+        assert_eq!(parse_github_remote("git@github.com:/repo.git"), None);
+    }
+
+    #[test]
+    fn parse_empty_repo() {
+        assert_eq!(parse_github_remote("git@github.com:owner/"), None);
+    }
 }
