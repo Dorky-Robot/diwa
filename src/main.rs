@@ -1007,21 +1007,23 @@ fn cmd_upgrade() -> Result<()> {
     Ok(())
 }
 
-/// Check if a path is writable by the current user.
+/// Check if the parent directory is writable by the current user.
 fn is_writable(path: &Path) -> bool {
-    if path.exists() {
-        return std::fs::OpenOptions::new().write(true).open(path).is_ok();
-    }
-    path.parent().is_some_and(|p| {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(p.join(".diwa-write-test"))
-            .map(|_| {
-                std::fs::remove_file(p.join(".diwa-write-test")).ok();
-                true
-            })
-            .unwrap_or(false)
-    })
+    // Test the directory, not the file — opening a running binary for writing
+    // fails on macOS even if you own it.
+    let dir = match path.parent() {
+        Some(d) => d,
+        None => return false,
+    };
+    let probe = dir.join(".diwa-write-test");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&probe)
+        .map(|_| {
+            std::fs::remove_file(&probe).ok();
+            true
+        })
+        .unwrap_or(false)
 }
