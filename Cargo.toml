@@ -1,12 +1,16 @@
 [package]
 name = "diwa"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 description = "Semantic git history index — extract the deeper meaning from your codebase"
 
 [[bin]]
 name = "diwa"
 path = "src/main.rs"
+
+[features]
+default = []
+load-dynamic = ["fastembed/ort-load-dynamic"]
 
 [dependencies]
 anyhow = "1"
