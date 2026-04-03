@@ -318,6 +318,25 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
     )?;
     let commits = git::filter_noise(commits);
 
+    // Deduplicate: skip commits that already have insights (makes `diwa index` idempotent).
+    let existing_shas = db.indexed_shas()?;
+    let commits: Vec<_> = if existing_shas.is_empty() {
+        commits
+    } else {
+        let before = commits.len();
+        let filtered: Vec<_> = commits
+            .into_iter()
+            .filter(|c| !existing_shas.contains(&c.sha))
+            .collect();
+        if before != filtered.len() {
+            println!(
+                "Skipping {} already-indexed commits.",
+                before - filtered.len()
+            );
+        }
+        filtered
+    };
+
     if commits.is_empty() {
         println!("No new commits to index.");
         return Ok(());

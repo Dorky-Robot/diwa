@@ -564,6 +564,18 @@ impl IndexDb {
         Ok(results)
     }
 
+    /// Return the set of commit SHAs that already have insights in the DB.
+    /// Used to make indexing idempotent — skip commits we've already processed.
+    pub fn indexed_shas(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT commit_sha FROM insights WHERE source_type != 'reflection'")?;
+        let shas = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<std::collections::HashSet<_>, _>>()?;
+        Ok(shas)
+    }
+
     pub fn count(&self) -> Result<usize> {
         let count: usize = self
             .conn
@@ -830,6 +842,39 @@ mod tests {
         assert!(db.last_indexed_sha().unwrap().is_some());
         db.reset().unwrap();
         assert!(db.last_indexed_sha().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_indexed_shas() {
+        let db = IndexDb::open_memory().unwrap();
+        assert!(db.indexed_shas().unwrap().is_empty());
+
+        let mut a = sample_insight();
+        a.commit_sha = "aaa".into();
+        let mut b = sample_insight();
+        b.commit_sha = "bbb".into();
+        // Two insights from the same commit.
+        let mut c = sample_insight();
+        c.commit_sha = "aaa".into();
+        c.title = "Another insight from same commit".into();
+
+        db.insert_insights(&[a, b, c]).unwrap();
+        let shas = db.indexed_shas().unwrap();
+        assert_eq!(shas.len(), 2);
+        assert!(shas.contains("aaa"));
+        assert!(shas.contains("bbb"));
+    }
+
+    #[test]
+    fn test_indexed_shas_excludes_reflections() {
+        let db = IndexDb::open_memory().unwrap();
+        let mut insight = sample_insight();
+        insight.source_type = "reflection".into();
+        insight.commit_sha = "reflection-sha".into();
+        db.insert_insights(&[insight]).unwrap();
+
+        let shas = db.indexed_shas().unwrap();
+        assert!(shas.is_empty());
     }
 
     #[test]
