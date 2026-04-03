@@ -201,10 +201,10 @@ fn render_list(
         .iter()
         .map(|r| {
             let color = category_color(&r.category);
-            let date = r.commit_date.split('T').next().unwrap_or(&r.commit_date);
+            let ts: String = r.commit_date.replace('T', " ").chars().take(19).collect();
 
             let line = Line::from(vec![
-                Span::styled(format!("{} ", date), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{} ", ts), Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("[{}] ", r.category), Style::default().fg(color)),
                 Span::raw(&r.title),
             ]);
@@ -231,7 +231,7 @@ fn render_list(
 
 fn render_detail(frame: &mut ratatui::Frame, area: Rect, r: &SearchResult, scroll: u16) {
     let color = category_color(&r.category);
-    let date = r.commit_date.split('T').next().unwrap_or(&r.commit_date);
+    let ts: String = r.commit_date.replace('T', " ").chars().take(19).collect();
 
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(
@@ -243,7 +243,7 @@ fn render_detail(frame: &mut ratatui::Frame, area: Rect, r: &SearchResult, scrol
         Line::from(vec![
             Span::styled(format!("[{}]", r.category), Style::default().fg(color)),
             Span::styled(
-                format!("  {}  {}", date, &r.commit_sha[..7.min(r.commit_sha.len())]),
+                format!("  {}  {}", ts, &r.commit_sha[..7.min(r.commit_sha.len())]),
                 Style::default().fg(Color::DarkGray),
             ),
         ]),

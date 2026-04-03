@@ -101,6 +101,9 @@ impl IndexDb {
             ",
         )?;
 
+        // Migrate: deduplicate existing rows and add unique index.
+        self.migrate_deduplicate()?;
+
         // Add embedding column to existing databases that don't have it.
         let has_embedding: bool = self.conn.query_row(
             "SELECT COUNT(*) > 0 FROM pragma_table_info('insights') WHERE name='embedding'",
@@ -134,6 +137,49 @@ impl IndexDb {
         Ok(())
     }
 
+    /// Deduplicate existing rows and ensure a unique index exists.
+    ///
+    /// Keeps the row with the lowest id for each (commit_sha, title, source_type)
+    /// triple, deletes the rest, and rebuilds the FTS index.
+    fn migrate_deduplicate(&self) -> Result<()> {
+        // Check if the unique index already exists — nothing to do.
+        let idx_exists: bool = self.conn.query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name='idx_insights_unique'",
+            [],
+            |row| row.get(0),
+        )?;
+        if idx_exists {
+            return Ok(());
+        }
+
+        // Delete duplicates: keep the row with the smallest id per group.
+        let deleted: usize = self.conn.execute(
+            "DELETE FROM insights WHERE id NOT IN (
+                SELECT MIN(id) FROM insights GROUP BY commit_sha, title, source_type
+            )",
+            [],
+        )?;
+
+        if deleted > 0 {
+            // Rebuild FTS to match.
+            self.conn.execute("DELETE FROM insights_fts", [])?;
+            self.conn.execute(
+                "INSERT INTO insights_fts (rowid, title, body, tags)
+                 SELECT id, title, body, tags FROM insights",
+                [],
+            )?;
+            eprintln!("diwa: cleaned up {deleted} duplicate insights.");
+        }
+
+        // Now create the unique index.
+        self.conn.execute(
+            "CREATE UNIQUE INDEX idx_insights_unique ON insights (commit_sha, title, source_type)",
+            [],
+        )?;
+
+        Ok(())
+    }
+
     /// Insert a batch of insights with optional embeddings.
     pub fn insert_insights(&self, insights: &[Insight]) -> Result<()> {
         self.insert_insights_with_embeddings(insights, None)
@@ -155,8 +201,8 @@ impl IndexDb {
                 .and_then(|e| e.get(i))
                 .map(|v| embedding_to_bytes(v));
 
-            tx.execute(
-                "INSERT INTO insights (commit_sha, commit_date, category, title, body, files, tags, source_type, pr_number, embedding, created_at)
+            let inserted = tx.execute(
+                "INSERT OR IGNORE INTO insights (commit_sha, commit_date, category, title, body, files, tags, source_type, pr_number, embedding, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 rusqlite::params![
                     insight.commit_sha,
@@ -173,11 +219,14 @@ impl IndexDb {
                 ],
             )?;
 
-            let rowid = tx.last_insert_rowid();
-            tx.execute(
-                "INSERT INTO insights_fts (rowid, title, body, tags) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![rowid, insight.title, insight.body, insight.tags],
-            )?;
+            // Only update FTS if a row was actually inserted (not a duplicate).
+            if inserted > 0 {
+                let rowid = tx.last_insert_rowid();
+                tx.execute(
+                    "INSERT INTO insights_fts (rowid, title, body, tags) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![rowid, insight.title, insight.body, insight.tags],
+                )?;
+            }
         }
 
         tx.commit()?;
@@ -897,5 +946,87 @@ mod tests {
         drop(db);
         let db2 = IndexDb::open(tmp.path(), "test--repo").unwrap();
         assert_eq!(db2.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_idempotent_insert() {
+        let db = IndexDb::open_memory().unwrap();
+        let insight = sample_insight();
+
+        // Insert the same insight three times.
+        db.insert_insights(&[insight.clone()]).unwrap();
+        db.insert_insights(&[insight.clone()]).unwrap();
+        db.insert_insights(&[insight]).unwrap();
+
+        // Should only have one row.
+        assert_eq!(db.count().unwrap(), 1);
+
+        // FTS should also return exactly one result.
+        let results = db.search("pull-based rendering", 10).unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_idempotent_insert_with_embeddings() {
+        let db = IndexDb::open_memory().unwrap();
+        let insight = sample_insight();
+        let emb = vec![0.1f32; 4];
+
+        db.insert_insights_with_embeddings(&[insight.clone()], Some(&[emb.clone()]))
+            .unwrap();
+        db.insert_insights_with_embeddings(&[insight], Some(&[emb]))
+            .unwrap();
+
+        assert_eq!(db.count().unwrap(), 1);
+        assert_eq!(db.count_with_embeddings().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_migration_deduplicates_existing() {
+        // Simulate a pre-migration database with duplicates.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("test--repo");
+        std::fs::create_dir_all(&db_path).unwrap();
+        let conn = rusqlite::Connection::open(db_path.join("index.db")).unwrap();
+
+        // Create the old schema (no unique index).
+        conn.execute_batch(
+            "CREATE TABLE insights (
+                id INTEGER PRIMARY KEY, commit_sha TEXT NOT NULL,
+                commit_date TEXT NOT NULL, category TEXT NOT NULL,
+                title TEXT NOT NULL, body TEXT NOT NULL,
+                files TEXT NOT NULL DEFAULT '[]', tags TEXT NOT NULL DEFAULT '',
+                source_type TEXT NOT NULL DEFAULT 'git', pr_number INTEGER,
+                embedding BLOB, created_at TEXT NOT NULL
+            );
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE VIRTUAL TABLE insights_fts USING fts5(
+                title, body, tags, content=insights, content_rowid=id
+            );",
+        )
+        .unwrap();
+
+        // Insert duplicates manually (with FTS, matching real-world state).
+        for _ in 0..3 {
+            conn.execute(
+                "INSERT INTO insights (commit_sha, commit_date, category, title, body, source_type, created_at)
+                 VALUES ('abc', '2026-01-01', 'decision', 'Same title', 'Same body', 'git', '2026-01-01')",
+                [],
+            ).unwrap();
+            let rowid = conn.last_insert_rowid();
+            conn.execute(
+                "INSERT INTO insights_fts (rowid, title, body, tags) VALUES (?1, 'Same title', 'Same body', '')",
+                [rowid],
+            ).unwrap();
+        }
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM insights", [], |r| r.get::<_, i64>(0)).unwrap(),
+            3
+        );
+        drop(conn);
+
+        // Open via IndexDb — migration should deduplicate.
+        let db = IndexDb::open(tmp.path(), "test--repo").unwrap();
+        assert_eq!(db.count().unwrap(), 1);
     }
 }

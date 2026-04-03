@@ -227,7 +227,7 @@ fn run_search(db: &IndexDb, query: &str) -> Result<(String, Vec<SearchResult>)> 
 
     let mut out = String::new();
     for (i, r) in results.iter().enumerate() {
-        let date = r.commit_date.split('T').next().unwrap_or(&r.commit_date);
+        let ts: String = r.commit_date.replace('T', " ").chars().take(19).collect();
         let sha = &r.commit_sha[..7.min(r.commit_sha.len())];
         out.push_str(&format!(
             "{}. [{}] {} (commit: {}, date: {})\n   {}\n   tags: {}\n\n",
@@ -235,7 +235,7 @@ fn run_search(db: &IndexDb, query: &str) -> Result<(String, Vec<SearchResult>)> 
             r.category,
             r.title,
             sha,
-            date,
+            ts,
             r.body,
             r.tags,
         ));
@@ -264,17 +264,11 @@ fn append_commit_index(answer: &str, seen: &HashMap<String, SearchResult>) -> St
             let candidate = &answer[i + 1..i + 8];
             if candidate.chars().all(|c| c.is_ascii_hexdigit()) && !cited_set.contains(candidate) {
                 cited_set.insert(candidate.to_string());
-                let date = seen
+                let ts = seen
                     .get(candidate)
-                    .map(|r| {
-                        r.commit_date
-                            .split('T')
-                            .next()
-                            .unwrap_or(&r.commit_date)
-                            .to_string()
-                    })
+                    .map(|r| r.commit_date.replace('T', " ").chars().take(19).collect())
                     .unwrap_or_else(|| "git".into());
-                cited.push((candidate.to_string(), date));
+                cited.push((candidate.to_string(), ts));
             }
             i += 9;
         } else {

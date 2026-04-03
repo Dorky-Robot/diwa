@@ -566,8 +566,8 @@ fn run_search(
             {
                 entry.2.push(i + 1);
             } else {
-                let date = r.commit_date.split('T').next().unwrap_or(&r.commit_date);
-                commit_index.push((short_sha.clone(), date.to_string(), vec![i + 1]));
+                let ts: String = r.commit_date.replace('T', " ").chars().take(19).collect();
+                commit_index.push((short_sha.clone(), ts, vec![i + 1]));
             }
 
             println!(
