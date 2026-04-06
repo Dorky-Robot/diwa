@@ -285,6 +285,12 @@ fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -
     let resolved = repo::resolve_repo(dir)?;
     let slug = format!("{}--{}", resolved.owner, resolved.name);
 
+    // Self-heal the manifest: if this repo isn't registered yet (e.g. the
+    // post-commit hook is indexing a repo that never had `diwa init` run,
+    // or the manifest file was deleted), add it now. Failing to write the
+    // manifest must never block indexing itself.
+    let _ = manifest::register_repo(&diwa, &slug, &resolved.local_path);
+
     let db = db::IndexDb::open(&diwa, &slug)?;
 
     if reindex {
@@ -766,17 +772,30 @@ fn run_browse(repo_arg: &str) -> Result<()> {
     browse::run_browse(insights, &display_name)
 }
 
+/// Union of manifest-registered slugs and slugs found on disk (those with an
+/// `index.db`). Returned sorted by slug. When a slug exists on disk but has
+/// no manifest entry, its path is `None`. Pure function on a path, so tests
+/// drive it with a tempdir.
+fn collect_ls_slugs(diwa_dir: &Path) -> Vec<(String, Option<PathBuf>)> {
+    use std::collections::BTreeMap;
+    let mut out: BTreeMap<String, Option<PathBuf>> = BTreeMap::new();
+    for slug in manifest::scan_indexed_slugs(diwa_dir) {
+        out.insert(slug, None);
+    }
+    for (slug, path) in manifest::read_manifest(diwa_dir) {
+        out.insert(slug, Some(path));
+    }
+    out.into_iter().collect()
+}
+
 fn run_ls() -> Result<()> {
     let diwa = diwa_dir();
-    let repos = manifest::read_manifest(&diwa);
+    let entries = collect_ls_slugs(&diwa);
 
-    if repos.is_empty() {
+    if entries.is_empty() {
         println!("No indexed repos. Run `diwa init` in a git repo to get started.");
         return Ok(());
     }
-
-    let mut entries: Vec<_> = repos.into_iter().collect();
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
 
     let home = std::env::var("HOME").unwrap_or_default();
     let shorten = |p: &Path| -> String {
@@ -799,10 +818,13 @@ fn run_ls() -> Result<()> {
         } else {
             0
         };
+        let path_str = match path {
+            Some(p) => shorten(p),
+            None => "(unregistered)".to_string(),
+        };
         println!(
             "  {display}  \x1b[90m{} insights  {}\x1b[0m",
-            count,
-            shorten(path)
+            count, path_str
         );
     }
 
@@ -1045,4 +1067,85 @@ fn is_writable(path: &Path) -> bool {
             true
         })
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn touch(path: &Path) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, b"stub").unwrap();
+    }
+
+    // ---- collect_ls_slugs: union of manifest entries + filesystem-scanned slugs ----
+
+    #[test]
+    fn test_collect_ls_slugs_empty_dir_is_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(collect_ls_slugs(tmp.path()).is_empty());
+    }
+
+    #[test]
+    fn test_collect_ls_slugs_includes_slugs_found_on_disk_without_manifest() {
+        // This is the bug we're fixing: a slug with an index.db on disk but
+        // no corresponding manifest entry must still be listed.
+        let tmp = tempfile::TempDir::new().unwrap();
+        touch(&tmp.path().join("Dorky-Robot--humOS").join("index.db"));
+
+        let rows = collect_ls_slugs(tmp.path());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "Dorky-Robot--humOS");
+        assert!(
+            rows[0].1.is_none(),
+            "disk-only slug should have no manifest path"
+        );
+    }
+
+    #[test]
+    fn test_collect_ls_slugs_includes_manifest_entries_with_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        touch(&tmp.path().join("owner--one").join("index.db"));
+        manifest::register_repo(tmp.path(), "owner--one", Path::new("/home/me/code/one")).unwrap();
+
+        let rows = collect_ls_slugs(tmp.path());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "owner--one");
+        assert_eq!(rows[0].1.as_deref(), Some(Path::new("/home/me/code/one")));
+    }
+
+    #[test]
+    fn test_collect_ls_slugs_unions_manifest_and_disk() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // A: on disk only
+        touch(&tmp.path().join("owner--disk-only").join("index.db"));
+        // B: on disk AND in manifest
+        touch(&tmp.path().join("owner--both").join("index.db"));
+        manifest::register_repo(tmp.path(), "owner--both", Path::new("/p/both")).unwrap();
+        // C: in manifest only (no index.db yet)
+        manifest::register_repo(tmp.path(), "owner--manifest-only", Path::new("/p/mo")).unwrap();
+
+        let rows = collect_ls_slugs(tmp.path());
+        let slugs: Vec<_> = rows.iter().map(|(s, _)| s.clone()).collect();
+        // Sorted alphabetically, no duplicates
+        assert_eq!(
+            slugs,
+            vec![
+                "owner--both".to_string(),
+                "owner--disk-only".to_string(),
+                "owner--manifest-only".to_string(),
+            ]
+        );
+
+        // Paths must come from the manifest when present, None otherwise
+        let by_slug: std::collections::HashMap<_, _> = rows.into_iter().collect();
+        assert_eq!(by_slug["owner--disk-only"], None);
+        assert_eq!(by_slug["owner--both"], Some(PathBuf::from("/p/both")));
+        assert_eq!(
+            by_slug["owner--manifest-only"],
+            Some(PathBuf::from("/p/mo"))
+        );
+    }
 }

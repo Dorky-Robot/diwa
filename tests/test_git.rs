@@ -76,3 +76,48 @@ fn test_stats_on_empty_index() {
         .unwrap();
     assert!(!output.status.success());
 }
+
+/// Indexing a repo should register it in the manifest, so that `diwa ls`
+/// lists it even if the user never ran `diwa init` on it. This is the
+/// self-healing behavior relied on by the post-commit hook.
+#[test]
+fn test_index_registers_repo_in_manifest() {
+    let repo = make_repo_with_commits(&[
+        ("main.rs", "fn main() {}", "feat: initial commit"),
+    ]);
+    // Give it a GitHub-looking remote so resolve_repo succeeds.
+    Command::new("git")
+        .args([
+            "-C",
+            repo.path().to_str().unwrap(),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/fake-owner/fake-repo.git",
+        ])
+        .output()
+        .unwrap();
+
+    let diwa_home = TempDir::new().unwrap();
+
+    // Run index. We don't care whether the full pipeline succeeds (Claude/embed
+    // model likely unavailable in test env). We only care that *before* doing
+    // any of that, diwa wrote the slug into the manifest.
+    let _ = Command::new(diwa_bin())
+        .env("DIWA_DIR", diwa_home.path())
+        .args(["index", repo.path().to_str().unwrap(), "--max-commits", "1"])
+        .output()
+        .unwrap();
+
+    let manifest_path = diwa_home.path().join("repos.json");
+    assert!(
+        manifest_path.exists(),
+        "expected {} to exist after `diwa index`",
+        manifest_path.display()
+    );
+    let contents = fs::read_to_string(&manifest_path).unwrap();
+    assert!(
+        contents.contains("fake-owner--fake-repo"),
+        "manifest should contain slug 'fake-owner--fake-repo', got: {contents}"
+    );
+}
