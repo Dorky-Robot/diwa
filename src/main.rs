@@ -1,5 +1,6 @@
 mod browse;
 mod claude;
+mod daemon;
 mod db;
 mod deep_search;
 mod embed;
@@ -8,6 +9,7 @@ mod git;
 mod github;
 mod install;
 mod manifest;
+mod migrate;
 mod reflect;
 mod repo;
 mod spinner;
@@ -125,14 +127,52 @@ pub enum Commands {
 
     /// Upgrade diwa to the latest release
     Upgrade,
+
+    /// Mark a repo as dirty so the daemon picks it up. Called by git hooks.
+    #[command(hide = true)]
+    Enqueue {
+        /// Target directory (default: current dir)
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+    },
+
+    /// Migrate existing repos to the daemon-based indexing model
+    Migrate,
+
+    /// Manage the background indexing daemon
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DaemonAction {
+    /// Install the launchd agent so the daemon starts on login
+    Install,
+    /// Remove the launchd agent
+    Uninstall,
+    /// Show daemon status (running / loaded)
+    Status,
+    /// Run the watcher in the foreground (used by launchd)
+    Run,
 }
 
 fn main() {
     let cli = Cli::parse();
 
-    // Check for updates in the background while the command runs
-    let is_upgrade = matches!(cli.command, Commands::Upgrade);
-    let update_rx = if is_upgrade {
+    // Check for updates in the background while the command runs.
+    // Skip for hot-path commands (Enqueue fires on every commit) and for
+    // daemon internals (Run is launchd's entrypoint — no user to notify).
+    let skip_update_check = matches!(
+        cli.command,
+        Commands::Upgrade
+            | Commands::Enqueue { .. }
+            | Commands::Daemon {
+                action: DaemonAction::Run
+            }
+    );
+    let update_rx = if skip_update_check {
         None
     } else {
         spawn_update_check()
@@ -152,6 +192,22 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    // Self-heal: if diwa was just upgraded past a version that changed
+    // the hook/daemon shape, re-run migrate transparently. Skipped for
+    // hot-path and self-referential commands.
+    let skip_auto_migrate = matches!(
+        cli.command,
+        Commands::Enqueue { .. }
+            | Commands::Migrate
+            | Commands::Upgrade
+            | Commands::Daemon {
+                action: DaemonAction::Run
+            }
+    );
+    if !skip_auto_migrate {
+        migrate::auto_migrate_if_needed(&diwa_dir());
+    }
+
     match cli.command {
         Commands::Index {
             dir,
@@ -178,7 +234,24 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Ls => run_ls(),
         Commands::Stats { repo } => run_stats(&repo),
         Commands::Upgrade => cmd_upgrade(),
+        Commands::Enqueue { dir } => run_enqueue(&dir),
+        Commands::Migrate => migrate::run(&diwa_dir()),
+        Commands::Daemon { action } => match action {
+            DaemonAction::Install => daemon::install(),
+            DaemonAction::Uninstall => daemon::uninstall(),
+            DaemonAction::Status => daemon::status(),
+            DaemonAction::Run => daemon::run(&diwa_dir()),
+        },
     }
+}
+
+fn run_enqueue(dir: &Path) -> Result<()> {
+    let resolved = repo::resolve_repo(dir)?;
+    let slug = format!("{}--{}", resolved.owner, resolved.name);
+    let queue = diwa_dir().join("queue");
+    std::fs::create_dir_all(&queue)?;
+    std::fs::write(queue.join(&slug), b"")?;
+    Ok(())
 }
 
 fn diwa_dir() -> PathBuf {
@@ -278,7 +351,7 @@ fn resolve_slug(repo_arg: &str) -> Result<String> {
     anyhow::bail!("No indexed repo matching '{repo_arg}'. Run `diwa index` in the repo first.")
 }
 
-fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -> Result<()> {
+pub(crate) fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -> Result<()> {
     let diwa = diwa_dir();
     std::fs::create_dir_all(&diwa)?;
 

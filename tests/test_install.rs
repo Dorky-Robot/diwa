@@ -54,7 +54,7 @@ fn test_install_creates_hook() {
     assert!(hook_path.exists());
     let content = fs::read_to_string(&hook_path).unwrap();
     assert!(content.contains("# diwa:"));
-    assert!(content.contains("diwa index"));
+    assert!(content.contains("diwa enqueue"));
 
     // Should be executable.
     let perms = fs::metadata(&hook_path).unwrap().permissions();
