@@ -15,16 +15,26 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            features: ""
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            features: ""
           - os: macos-latest
             target: aarch64-apple-darwin
+            features: ""
+          # Intel macOS: ort-sys has no prebuilt for this target, so we
+          # compile with `load-dynamic` and have the formula `depends_on`
+          # onnxruntime from brew. macos-latest is arm64 — we cross-build
+          # to x86_64, which works because load-dynamic skips linking ORT.
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            features: "--features load-dynamic"
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - run: cargo build --release --target ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
       - name: Package
         run: |
           cd target/${{ matrix.target }}/release
@@ -92,6 +102,14 @@ jobs:
               on_arm do
                 url "${BASE}/diwa-aarch64-apple-darwin.tar.gz"
                 sha256 "${SHA_aarch64_apple_darwin}"
+              end
+
+              on_intel do
+                url "${BASE}/diwa-x86_64-apple-darwin.tar.gz"
+                sha256 "${SHA_x86_64_apple_darwin}"
+                # Built with load-dynamic so ort-sys doesn't need a prebuilt.
+                # Binary loads libonnxruntime.dylib from /usr/local/lib.
+                depends_on "onnxruntime"
               end
             end
 
