@@ -129,15 +129,14 @@ jobs:
               bin.install "diwa"
             end
 
-            def post_install
-              # Seamlessly move existing users onto the daemon-based indexing
-              # model: rewrites hooks in every registered repo and loads the
-              # launchd agent. Idempotent and does not touch indexed data.
-              # Failures are logged but don't block install — auto-migrate on
-              # next \`diwa\` invocation catches anything that slips through.
-              system bin/"diwa", "migrate"
-            rescue StandardError => e
-              opoo "diwa migrate failed (#{e.message}); run \`diwa migrate\` manually."
+            def caveats
+              <<~EOS
+                diwa upgrades auto-heal on first use: next time you run any
+                \`diwa\` command, hooks in registered repos get rewritten and
+                the background daemon is (re)loaded. No action needed.
+
+                Fresh install? Run \`diwa init\` inside a git repo to get started.
+              EOS
             end
 
             test do
