@@ -1120,6 +1120,11 @@ fn cmd_upgrade() -> Result<()> {
         ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
         ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
         ("aarch64", "macos") => "aarch64-apple-darwin",
+        // Intel Mac tarball is load-dynamic; the binary links to libonnxruntime
+        // at runtime, which the brew formula installs via `depends_on`. Users
+        // who got here by any other install route need onnxruntime on
+        // DYLD_LIBRARY_PATH (or `brew install onnxruntime`).
+        ("x86_64", "macos") => "x86_64-apple-darwin",
         _ => anyhow::bail!("unsupported platform: {arch}-{os}"),
     };
 
