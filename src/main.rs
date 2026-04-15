@@ -941,6 +941,62 @@ fn run_stats(repo_arg: &str) -> Result<()> {
     Ok(())
 }
 
+/// Numeric "a.b.c" comparison: true iff `a` represents a strictly higher
+/// version than `b`. Non-numeric segments compare lexicographically, which
+/// is enough for our "major.minor.patch" release scheme.
+fn version_gt(a: &str, b: &str) -> bool {
+    let mut ap = a.split('.');
+    let mut bp = b.split('.');
+    loop {
+        match (ap.next(), bp.next()) {
+            (None, None) => return false,
+            (Some(x), None) => return x.parse::<u64>().is_ok_and(|n| n > 0) || !x.is_empty(),
+            (None, Some(_)) => return false,
+            (Some(x), Some(y)) => {
+                let (nx, ny) = (x.parse::<u64>().ok(), y.parse::<u64>().ok());
+                match (nx, ny) {
+                    (Some(nx), Some(ny)) if nx != ny => return nx > ny,
+                    (Some(_), Some(_)) => continue,
+                    _ if x != y => return x > y,
+                    _ => continue,
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::version_gt;
+
+    #[test]
+    fn higher_patch_is_greater() {
+        assert!(version_gt("0.4.3", "0.4.2"));
+    }
+
+    #[test]
+    fn older_cache_does_not_trigger_upgrade_prompt() {
+        // Regression: after brew upgrade, cache may still say 0.4.2 while
+        // current is 0.4.3. `!=` would advertise a stale "upgrade"; `>` must not.
+        assert!(!version_gt("0.4.2", "0.4.3"));
+    }
+
+    #[test]
+    fn equal_is_not_greater() {
+        assert!(!version_gt("0.4.3", "0.4.3"));
+    }
+
+    #[test]
+    fn higher_minor_beats_higher_patch() {
+        assert!(version_gt("0.5.0", "0.4.99"));
+    }
+
+    #[test]
+    fn higher_major_wins() {
+        assert!(version_gt("1.0.0", "0.9.9"));
+    }
+}
+
 /// Spawn a background thread to check for a newer diwa release.
 /// Returns a receiver that yields `Some(latest_version)` if an update is
 /// available, or `None` if already current. Skipped if checked within 24h.
@@ -959,7 +1015,11 @@ fn spawn_update_check() -> Option<mpsc::Receiver<Option<String>>> {
         if let Ok(cached) = std::fs::read_to_string(&cache_file) {
             let latest = cached.trim().to_string();
             let current = env!("CARGO_PKG_VERSION");
-            if !latest.is_empty() && latest != current {
+            // Only notify when the cache knows of a strictly *newer* release.
+            // After a local upgrade (e.g. `brew upgrade`) the cache can hold
+            // a version older than `current`; a plain `!=` would falsely
+            // offer a downgrade. See also: cache refreshes after 24h anyway.
+            if !latest.is_empty() && version_gt(&latest, current) {
                 let (tx, rx) = mpsc::channel();
                 let _ = tx.send(Some(latest));
                 return Some(rx);
@@ -1001,7 +1061,7 @@ fn spawn_update_check() -> Option<mpsc::Receiver<Option<String>>> {
             let _ = std::fs::write(&cache_file, &latest);
 
             let current = env!("CARGO_PKG_VERSION");
-            if latest != current {
+            if version_gt(&latest, current) {
                 Some(latest)
             } else {
                 None
