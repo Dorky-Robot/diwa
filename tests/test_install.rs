@@ -184,6 +184,83 @@ fn test_custom_hooks_path() {
 }
 
 #[test]
+fn test_update_renames_stale_shadow_in_home() {
+    // Simulates the `~/.local/bin/diwa` (pre-0.4.0) shadowing the installed
+    // binary scenario: a shell script earlier on PATH rejects `enqueue`, so
+    // git hooks silently fail. `diwa update` should rename it aside.
+    let home = TempDir::new().unwrap();
+    let shadow_dir = home.path().join(".local/bin");
+    fs::create_dir_all(&shadow_dir).unwrap();
+    let shadow = shadow_dir.join("diwa");
+
+    // Fake "old" diwa: behaves like pre-0.4.0 for `enqueue`.
+    fs::write(
+        &shadow,
+        "#!/bin/sh\nif [ \"$1\" = \"enqueue\" ]; then\n  echo 'error: unrecognized subcommand '\"'\"'enqueue'\"'\"'' 1>&2\n  exit 2\nfi\nexit 0\n",
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&shadow).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&shadow, perms).unwrap();
+
+    // Put the shadow *before* the real diwa on PATH.
+    let real_dir = diwa_bin().parent().unwrap().to_path_buf();
+    let path = format!(
+        "{}:{}",
+        shadow_dir.display(),
+        real_dir.display(),
+    );
+
+    let output = Command::new(diwa_bin())
+        .env("HOME", home.path())
+        .env("PATH", &path)
+        .arg("update")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "diwa update failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Shadow should have been moved aside.
+    assert!(
+        !shadow.exists(),
+        "shadow binary still at {} — repair did not run",
+        shadow.display()
+    );
+    let backup = shadow_dir.join("diwa.stale-bak");
+    assert!(
+        backup.exists(),
+        "expected shadow to be renamed to {}",
+        backup.display()
+    );
+}
+
+#[test]
+fn test_update_leaves_non_shadowing_path_alone() {
+    // If the only `diwa` on PATH is the current binary, update should be a
+    // no-op wrt PATH repair.
+    let home = TempDir::new().unwrap();
+    let real_dir = diwa_bin().parent().unwrap().to_path_buf();
+
+    let output = Command::new(diwa_bin())
+        .env("HOME", home.path())
+        .env("PATH", real_dir.display().to_string())
+        .arg("update")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Moved stale"),
+        "unexpected repair in clean-PATH scenario: {stdout}"
+    );
+}
+
+#[test]
 fn test_stale_hooks_path_fallback() {
     let repo = make_git_repo();
 

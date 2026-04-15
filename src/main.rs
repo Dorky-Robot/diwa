@@ -790,6 +790,12 @@ fn run_update() -> Result<()> {
 
     println!("diwa v{}", env!("CARGO_PKG_VERSION"));
 
+    // Before touching hooks, make sure the hooks will actually resolve to
+    // *this* binary. A stale `diwa` earlier on PATH (e.g. a leftover
+    // `cargo install` shim in ~/.local/bin) silently breaks enqueue-based
+    // indexing because pre-0.4.0 doesn't know the `enqueue` subcommand.
+    report_shadow_repairs(install::repair_shadowed_binaries());
+
     // Refresh hooks and index for all registered repos.
     let repos = manifest::read_manifest(&diwa);
 
@@ -827,6 +833,38 @@ fn run_update() -> Result<()> {
 
     println!("\nAll repos updated.");
     Ok(())
+}
+
+fn report_shadow_repairs(outcomes: Vec<install::ShadowRepair>) {
+    let mut printed_header = false;
+    let mut ensure_header = || {
+        if !printed_header {
+            println!("\nChecking PATH for stale diwa binaries...");
+            printed_header = true;
+        }
+    };
+
+    for outcome in outcomes {
+        match outcome {
+            install::ShadowRepair::Clean => {}
+            install::ShadowRepair::Repaired { shadow, backup } => {
+                ensure_header();
+                println!(
+                    "  Moved stale {} -> {} (was shadowing the installed diwa; hooks will now resolve correctly).",
+                    shadow.display(),
+                    backup.display(),
+                );
+            }
+            install::ShadowRepair::Warned { shadow, reason } => {
+                ensure_header();
+                eprintln!(
+                    "  Warning: {} precedes the current binary on PATH ({}). Git hooks may call the wrong diwa.",
+                    shadow.display(),
+                    reason,
+                );
+            }
+        }
+    }
 }
 
 fn run_browse(repo_arg: &str) -> Result<()> {

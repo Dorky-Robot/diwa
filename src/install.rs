@@ -9,7 +9,7 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Hooks we install. `post-commit` covers local commits; `post-merge`
 /// covers the `git pull`/fast-forward path that was missed before.
@@ -295,4 +295,125 @@ pub fn find_hooks_dir(repo_path: &Path) -> Result<std::path::PathBuf> {
     };
 
     Ok(git_dir.join("hooks"))
+}
+
+/// Outcome of scanning PATH for a `diwa` binary that shadows the current one.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ShadowRepair {
+    /// Current binary is first on PATH — nothing to do.
+    Clean,
+    /// A stale shadow was moved aside so hooks will resolve to the new binary.
+    Repaired { shadow: PathBuf, backup: PathBuf },
+    /// Something shadows us but we won't touch it (system path, or it isn't
+    /// obviously stale). Caller should leave a breadcrumb for the user.
+    Warned { shadow: PathBuf, reason: &'static str },
+}
+
+/// Detect and repair stale `diwa` binaries earlier on `$PATH` than the
+/// currently running one.
+///
+/// Git hooks call `command -v diwa`, so if an older binary sits earlier on
+/// PATH, the hook silently executes the old `diwa enqueue` which doesn't
+/// exist pre-0.4.0 — indexing stops happening and the user sees nothing in
+/// the daemon log. Running this from `diwa update` untangles PATH once per
+/// upgrade instead of asking the user to debug their own shell config.
+pub fn repair_shadowed_binaries() -> Vec<ShadowRepair> {
+    let current = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+    let current_canon = current.canonicalize().unwrap_or_else(|_| current.clone());
+
+    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let path_var = match std::env::var_os("PATH") {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+
+    let mut results = Vec::new();
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join("diwa");
+        if !candidate.exists() {
+            continue;
+        }
+        let candidate_canon = candidate
+            .canonicalize()
+            .unwrap_or_else(|_| candidate.clone());
+
+        if candidate_canon == current_canon {
+            // Reached ourselves — no shadow remains.
+            if results.is_empty() {
+                results.push(ShadowRepair::Clean);
+            }
+            return results;
+        }
+
+        if !is_stale_shadow(&candidate) {
+            results.push(ShadowRepair::Warned {
+                shadow: candidate,
+                reason: "shadowing binary accepts `enqueue` — not stale",
+            });
+            continue;
+        }
+
+        let in_home = home
+            .as_ref()
+            .map(|h| candidate.starts_with(h))
+            .unwrap_or(false);
+        if !in_home {
+            results.push(ShadowRepair::Warned {
+                shadow: candidate,
+                reason: "outside $HOME — remove manually",
+            });
+            continue;
+        }
+
+        let backup = stale_backup_path(&candidate);
+        let _ = fs::remove_file(&backup);
+        match fs::rename(&candidate, &backup) {
+            Ok(()) => results.push(ShadowRepair::Repaired {
+                shadow: candidate,
+                backup,
+            }),
+            Err(_) => results.push(ShadowRepair::Warned {
+                shadow: candidate,
+                reason: "could not rename shadow aside",
+            }),
+        }
+    }
+
+    if results.is_empty() {
+        results.push(ShadowRepair::Clean);
+    }
+    results
+}
+
+fn is_stale_shadow(shadow: &Path) -> bool {
+    // Pre-0.4.0 diwa doesn't know `enqueue`; newer versions print usage and exit 0.
+    let Ok(out) = std::process::Command::new(shadow)
+        .arg("enqueue")
+        .arg("--help")
+        .output()
+    else {
+        // Binary that won't execute at all is as broken as a stale one.
+        return true;
+    };
+    if out.status.success() {
+        return false;
+    }
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    combined.contains("unrecognized subcommand") || combined.contains("unrecognized")
+}
+
+fn stale_backup_path(shadow: &Path) -> PathBuf {
+    let mut name = shadow
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "diwa".to_string());
+    name.push_str(".stale-bak");
+    shadow.with_file_name(name)
 }
