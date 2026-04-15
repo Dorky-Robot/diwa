@@ -142,6 +142,7 @@ pub fn install() -> Result<()> {
     fs::create_dir_all(diwa.join("queue"))?;
 
     let log_path = diwa.join("daemon.log");
+    let path_env = build_daemon_path();
 
     let plist_body = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -159,7 +160,7 @@ pub fn install() -> Result<()> {
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>{path}</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
@@ -177,6 +178,7 @@ pub fn install() -> Result<()> {
         label = PLIST_LABEL,
         exe = xml_escape(&exe.to_string_lossy()),
         log = xml_escape(&log_path.to_string_lossy()),
+        path = xml_escape(&path_env),
     );
 
     let plist_file = plist_path()?;
@@ -294,6 +296,26 @@ fn diwa_dir() -> PathBuf {
     } else {
         PathBuf::from(".diwa")
     }
+}
+
+/// PATH for the launchd-spawned daemon. Must include `~/.local/bin` so the
+/// indexer can spawn `claude` (the CLI's default install location), plus the
+/// usual system + homebrew dirs. Common user bin dirs are prepended only if
+/// they actually exist on this machine — keeps PATH tight on fresh installs.
+fn build_daemon_path() -> String {
+    let mut dirs: Vec<String> = Vec::new();
+    if let Some(home) = home_dir() {
+        for sub in [".local/bin", "bin", ".cargo/bin"] {
+            let p = home.join(sub);
+            if p.exists() {
+                dirs.push(p.to_string_lossy().into_owned());
+            }
+        }
+    }
+    for sys in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+        dirs.push(sys.to_string());
+    }
+    dirs.join(":")
 }
 
 fn xml_escape(s: &str) -> String {
