@@ -418,11 +418,14 @@ pub(crate) fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reind
 
     println!("Found {} commits to process.", commits.len());
 
-    // Enrich with GitHub PR data if available.
+    // Enrich with GitHub PR data if available. A failure here degrades the
+    // insight quality but shouldn't abort indexing, so we warn and continue.
     let mut commits = commits;
     if github::gh_available() {
         println!("Enriching with GitHub PR data...");
-        let _ = github::enrich_with_prs(&mut commits, &resolved.full_name);
+        if let Err(e) = github::enrich_with_prs(&mut commits, &resolved.full_name) {
+            eprintln!("Warning: PR enrichment failed ({e}) — indexing without PR context.");
+        }
     }
 
     println!("Generating embeddings with BGE-small-en-v1.5 (first run downloads ~33MB model).");
@@ -708,14 +711,12 @@ fn run_reflect(repo_arg: &str) -> Result<()> {
     );
 
     // Try to get repo path for ground truth. Works if repo_arg is a path or cwd.
+    // If canonicalize fails (path doesn't exist), fall through to the no-path
+    // branch — silently defaulting to "" (PathBuf::default) would make
+    // reflect read files relative to cwd, which is wrong.
     let repo_path = if repo_arg.starts_with('.') || repo_arg.starts_with('/') {
-        Some(
-            std::path::PathBuf::from(repo_arg)
-                .canonicalize()
-                .unwrap_or_default(),
-        )
+        std::path::PathBuf::from(repo_arg).canonicalize().ok()
     } else {
-        // Try resolving from cwd.
         repo::resolve_repo(std::path::Path::new("."))
             .ok()
             .map(|r| r.local_path)
@@ -815,6 +816,12 @@ fn run_update() -> Result<()> {
 
     println!("\nUpdating {} registered repos:\n", repos.len());
 
+    // Track per-repo failures so CI/scripts see a non-zero exit when any
+    // repo failed. Printing "index failed" inline is nice for the human
+    // watching, but returning Ok(()) would hide real breakage from
+    // automation (cron jobs, fleet update scripts).
+    let mut failed: Vec<String> = Vec::new();
+
     for (slug, path) in &repos {
         let display = slug.replace("--", "/");
         print!("  {display}... ");
@@ -829,6 +836,7 @@ fn run_update() -> Result<()> {
             Ok(_) => {}
             Err(e) => {
                 println!("hook update failed ({e}), skipping.");
+                failed.push(display);
                 continue;
             }
         }
@@ -836,12 +844,23 @@ fn run_update() -> Result<()> {
         // Run incremental index (picks up new commits + latest prompts).
         match run_index(path, 5000, 8, false) {
             Ok(_) => println!("done."),
-            Err(e) => println!("index failed ({e})."),
+            Err(e) => {
+                println!("index failed ({e}).");
+                failed.push(display);
+            }
         }
     }
 
-    println!("\nAll repos updated.");
-    Ok(())
+    if failed.is_empty() {
+        println!("\nAll repos updated.");
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "{} repo(s) failed to update: {}",
+            failed.len(),
+            failed.join(", ")
+        )
+    }
 }
 
 fn report_shadow_repairs(outcomes: Vec<install::ShadowRepair>) {

@@ -1,7 +1,7 @@
 //! Optional GitHub enrichment — add PR context to commits when `gh` is available.
 
 use crate::git::CommitData;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::process::Command;
 
 /// Check if `gh` CLI is authenticated and available.
@@ -67,10 +67,16 @@ fn fetch_merged_prs(repo: &str, limit: usize) -> Result<Vec<PrData>> {
         .output()?;
 
     if !output.status.success() {
-        return Ok(Vec::new());
+        // Surface the real reason (auth expired, repo not found, rate limit)
+        // so users don't silently get insight-without-PR-context. Returning
+        // Err lets the caller log and continue — an empty Vec would look
+        // indistinguishable from "this repo has no merged PRs".
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("gh pr list failed: {}", stderr.trim());
     }
 
-    let parsed: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap_or_default();
+    let parsed: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout)
+        .context("gh pr list returned invalid JSON")?;
 
     Ok(parsed
         .into_iter()
