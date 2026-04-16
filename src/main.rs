@@ -1189,6 +1189,10 @@ fn cmd_upgrade() -> Result<()> {
             .arg(&dest)
             .status()?;
     } else {
+        // On macOS you cannot write to a running binary — remove it first
+        // so the new copy gets a fresh inode (the old binary stays mapped
+        // in memory until this process exits).
+        std::fs::remove_file(&dest).ok();
         std::fs::copy(&extracted, &dest)?;
         #[cfg(unix)]
         {
