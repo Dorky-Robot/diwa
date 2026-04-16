@@ -143,6 +143,16 @@ pub fn install() -> Result<()> {
 
     let log_path = diwa.join("daemon.log");
     let path_env = build_daemon_path();
+    let ort_dylib_env = find_ort_dylib();
+
+    let ort_dylib_entry = if let Some(ref dylib) = ort_dylib_env {
+        format!(
+            "\n        <key>ORT_DYLIB_PATH</key>\n        <string>{}</string>",
+            xml_escape(dylib)
+        )
+    } else {
+        String::new()
+    };
 
     let plist_body = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -160,7 +170,7 @@ pub fn install() -> Result<()> {
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>{path}</string>
+        <string>{path}</string>{ort_dylib}
     </dict>
     <key>RunAtLoad</key>
     <true/>
@@ -179,6 +189,7 @@ pub fn install() -> Result<()> {
         exe = xml_escape(&exe.to_string_lossy()),
         log = xml_escape(&log_path.to_string_lossy()),
         path = xml_escape(&path_env),
+        ort_dylib = ort_dylib_entry,
     );
 
     let plist_file = plist_path()?;
@@ -302,6 +313,20 @@ fn diwa_dir() -> PathBuf {
 /// indexer can spawn `claude` (the CLI's default install location), plus the
 /// usual system + homebrew dirs. Common user bin dirs are prepended only if
 /// they actually exist on this machine — keeps PATH tight on fresh installs.
+/// Probe well-known Homebrew locations for the ONNX Runtime dylib.
+/// Returns the first path found, or `None` if the library isn't installed.
+fn find_ort_dylib() -> Option<String> {
+    for path in [
+        "/usr/local/lib/libonnxruntime.dylib",   // Intel Homebrew
+        "/opt/homebrew/lib/libonnxruntime.dylib", // Apple Silicon Homebrew
+    ] {
+        if std::path::Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+    None
+}
+
 fn build_daemon_path() -> String {
     let mut dirs: Vec<String> = Vec::new();
     if let Some(home) = home_dir() {

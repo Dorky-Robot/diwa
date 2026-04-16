@@ -5,6 +5,36 @@ use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+/// Ensure the ONNX Runtime dylib can be found on `load-dynamic` builds.
+///
+/// When compiled with the `load-dynamic` feature (used for Intel Mac because
+/// ort-sys has no prebuilt for x86_64-apple-darwin), the `ort` crate calls
+/// `dlopen("libonnxruntime.dylib")` at runtime. If the user installed diwa via
+/// `diwa upgrade` rather than Homebrew, the dylib won't be on the default
+/// search path. We probe well-known Homebrew locations and set `ORT_DYLIB_PATH`
+/// before the first model initialisation so dlopen succeeds.
+#[cfg(feature = "load-dynamic")]
+fn ensure_ort_dylib() {
+    if std::env::var_os("ORT_DYLIB_PATH").is_some() {
+        return; // user already set it — respect their choice
+    }
+    let candidates = [
+        "/usr/local/lib/libonnxruntime.dylib",       // Intel Homebrew
+        "/opt/homebrew/lib/libonnxruntime.dylib",     // Apple Silicon Homebrew
+    ];
+    for path in candidates {
+        if std::path::Path::new(path).exists() {
+            std::env::set_var("ORT_DYLIB_PATH", path);
+            return;
+        }
+    }
+}
+
+#[cfg(not(feature = "load-dynamic"))]
+fn ensure_ort_dylib() {
+    // Static linking — nothing to do.
+}
+
 /// Lazily initialized embedding model (singleton behind a mutex).
 static MODEL: Mutex<Option<TextEmbedding>> = Mutex::new(None);
 
@@ -26,6 +56,7 @@ where
         .lock()
         .map_err(|e| anyhow::anyhow!("model lock poisoned: {e}"))?;
     if guard.is_none() {
+        ensure_ort_dylib();
         let model = TextEmbedding::try_new(
             InitOptions::new(EmbeddingModel::BGESmallENV15)
                 .with_cache_dir(model_cache_dir())

@@ -1199,6 +1199,18 @@ fn cmd_upgrade() -> Result<()> {
 
     std::fs::remove_dir_all(&tmpdir).ok();
     eprintln!("Upgraded to v{latest}.");
+
+    // Intel Mac uses the load-dynamic build — ensure onnxruntime is present.
+    if target == "x86_64-apple-darwin" {
+        let has_dylib = Path::new("/usr/local/lib/libonnxruntime.dylib").exists()
+            || Path::new("/opt/homebrew/lib/libonnxruntime.dylib").exists();
+        if !has_dylib {
+            eprintln!();
+            eprintln!("Note: Intel Mac builds require the ONNX Runtime library.");
+            eprintln!("Install it with:  brew install onnxruntime");
+        }
+    }
+
     Ok(())
 }
 
