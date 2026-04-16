@@ -12,9 +12,10 @@ mod manifest;
 mod migrate;
 mod reflect;
 mod repo;
+mod sanitize;
 mod spinner;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -643,16 +644,24 @@ fn run_search(
                 commit_index.push((short_sha.clone(), ts, vec![i + 1]));
             }
 
+            // Strip control chars before display — insight text originates
+            // from commit messages / PR comments via Claude, which can
+            // contain ANSI escapes or other terminal-hijacking sequences.
+            let safe_category = sanitize::strip_display_controls(&r.category);
+            let safe_title = sanitize::strip_display_controls(&r.title);
+            let safe_body = sanitize::strip_display_controls(&r.body);
+            let safe_tags = sanitize::strip_display_controls(&r.tags);
+
             println!(
                 "\x1b[1m{}. [{}] {}\x1b[0m  \x1b[90m[{}]\x1b[0m",
                 i + 1,
-                r.category,
-                r.title,
+                safe_category,
+                safe_title,
                 short_sha,
             );
-            println!("   {}", r.body);
-            if !r.tags.is_empty() {
-                println!("   \x1b[90mtags: {}\x1b[0m", r.tags);
+            println!("   {safe_body}");
+            if !safe_tags.is_empty() {
+                println!("   \x1b[90mtags: {safe_tags}\x1b[0m");
             }
             println!();
         }
@@ -1048,13 +1057,9 @@ fn spawn_update_check() -> Option<mpsc::Receiver<Option<String>>> {
                 return None;
             }
 
-            let body = String::from_utf8_lossy(&output.stdout);
-            let tag = body
-                .lines()
-                .find(|l| l.contains("\"tag_name\""))
-                .and_then(|l| l.split('"').nth(3))?;
-
-            let latest = tag.strip_prefix('v').unwrap_or(tag).to_string();
+            let release: GithubRelease = serde_json::from_slice(&output.stdout).ok()?;
+            let tag = release.tag_name;
+            let latest = tag.strip_prefix('v').unwrap_or(&tag).to_string();
 
             // Cache the result
             let _ = std::fs::create_dir_all(&cache_dir);
@@ -1079,6 +1084,15 @@ fn cache_dir() -> PathBuf {
     PathBuf::from(home).join(".cache").join("diwa")
 }
 
+/// Minimal shape of the `/releases/latest` payload we care about. Using a
+/// proper JSON parse (instead of splitting on `"`) means a release name or
+/// body that happens to contain the text `"tag_name"` can't poison the
+/// auto-upgrade flow into downloading the wrong tarball.
+#[derive(serde::Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+}
+
 fn cmd_upgrade() -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
 
@@ -1095,14 +1109,9 @@ fn cmd_upgrade() -> Result<()> {
         "failed to check for updates — could not reach GitHub"
     );
 
-    let body = String::from_utf8_lossy(&output.stdout);
-    let tag = body
-        .lines()
-        .find(|l| l.contains("\"tag_name\""))
-        .and_then(|l| l.split('"').nth(3))
-        .ok_or_else(|| anyhow::anyhow!("could not parse latest release tag"))?
-        .to_string();
-
+    let release: GithubRelease = serde_json::from_slice(&output.stdout)
+        .context("could not parse GitHub release JSON")?;
+    let tag = release.tag_name;
     let latest = tag.strip_prefix('v').unwrap_or(&tag);
 
     if latest == current {
@@ -1131,9 +1140,15 @@ fn cmd_upgrade() -> Result<()> {
     let url =
         format!("https://github.com/Dorky-Robot/diwa/releases/download/{tag}/diwa-{target}.tar.gz");
 
-    // Download and extract to temp dir
-    let tmpdir = std::env::temp_dir().join(format!("diwa-upgrade-{}", std::process::id()));
-    std::fs::create_dir_all(&tmpdir)?;
+    // Use a randomly-named tempdir (0700 on Unix) so a local attacker can't
+    // pre-create /tmp/diwa-upgrade-<pid> as a symlink and hijack the
+    // extraction target — that would let them plant a binary that we then
+    // `sudo cp` to /usr/local/bin/diwa.
+    let tmp = tempfile::Builder::new()
+        .prefix("diwa-upgrade-")
+        .tempdir()
+        .context("failed to create temp dir for upgrade")?;
+    let tmpdir = tmp.path();
 
     let tarball = tmpdir.join("diwa.tar.gz");
     let dl = std::process::Command::new("curl")
@@ -1141,29 +1156,26 @@ fn cmd_upgrade() -> Result<()> {
         .arg(&tarball)
         .status()?;
 
-    if !dl.success() {
-        std::fs::remove_dir_all(&tmpdir).ok();
-        anyhow::bail!("failed to download {url}");
-    }
+    anyhow::ensure!(dl.success(), "failed to download {url}");
+
+    // Verify the tarball against the published SHA256SUMS before extracting.
+    verify_checksum(&tarball, target, &tag)?;
 
     let extract = std::process::Command::new("tar")
         .args(["xzf"])
         .arg(&tarball)
         .arg("-C")
-        .arg(&tmpdir)
+        .arg(tmpdir)
         .status()?;
 
-    if !extract.success() {
-        std::fs::remove_dir_all(&tmpdir).ok();
-        anyhow::bail!("failed to extract archive");
-    }
+    anyhow::ensure!(extract.success(), "failed to extract archive");
 
     // diwa archives contain the binary directly (no subdirectory)
     let extracted = tmpdir.join("diwa");
-    if !extracted.exists() {
-        std::fs::remove_dir_all(&tmpdir).ok();
-        anyhow::bail!("diwa binary not found in archive");
-    }
+    anyhow::ensure!(
+        extracted.exists(),
+        "diwa binary not found in archive"
+    );
 
     // Replace current binary
     let current_exe = std::env::current_exe()?;
@@ -1201,7 +1213,7 @@ fn cmd_upgrade() -> Result<()> {
         }
     }
 
-    std::fs::remove_dir_all(&tmpdir).ok();
+    // tempfile::TempDir cleans up on drop — nothing to do here.
     eprintln!("Upgraded to v{latest}.");
 
     // Intel Mac uses the load-dynamic build — ensure onnxruntime is present.
@@ -1216,6 +1228,96 @@ fn cmd_upgrade() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Verify the downloaded tarball against the SHA256SUMS file published
+/// alongside the release. If the checksum file is missing (older release
+/// that predates signing), we refuse to install — the upgrade path
+/// otherwise does a `sudo cp` into /usr/local/bin, and an unsigned download
+/// there is an arbitrary-code-execution primitive for anyone who can MitM
+/// the GitHub download or compromise the release assets.
+fn verify_checksum(tarball: &Path, target: &str, tag: &str) -> Result<()> {
+    let sums_url = format!(
+        "https://github.com/Dorky-Robot/diwa/releases/download/{tag}/SHA256SUMS"
+    );
+
+    let sums_body = std::process::Command::new("curl")
+        .args([
+            "-fsSL",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "30",
+            &sums_url,
+        ])
+        .output()
+        .context("failed to run curl for SHA256SUMS")?;
+
+    anyhow::ensure!(
+        sums_body.status.success(),
+        "could not fetch SHA256SUMS for {tag} — refusing to install an \
+         unverified binary. If this release predates checksum publishing, \
+         use `brew upgrade diwa` instead."
+    );
+
+    let sums_text = String::from_utf8_lossy(&sums_body.stdout);
+    let expected_name = format!("diwa-{target}.tar.gz");
+    let expected = sums_text
+        .lines()
+        .find_map(|l| {
+            // Format: "<sha256>  <filename>"
+            let mut parts = l.split_whitespace();
+            let hash = parts.next()?;
+            let name = parts.next()?;
+            (name == expected_name).then_some(hash.to_string())
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no checksum entry for {expected_name} in SHA256SUMS — \
+                 refusing to install"
+            )
+        })?;
+
+    let actual = sha256_file(tarball)?;
+
+    anyhow::ensure!(
+        actual.eq_ignore_ascii_case(&expected),
+        "checksum mismatch for {expected_name}: expected {expected}, got \
+         {actual}. The downloaded tarball does not match the published \
+         SHA256SUMS — aborting."
+    );
+
+    Ok(())
+}
+
+/// Compute SHA256 of a file by shelling out to `shasum -a 256` (macOS) or
+/// `sha256sum` (Linux). Both are stock on every platform diwa targets.
+fn sha256_file(path: &Path) -> Result<String> {
+    let (prog, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+        ("shasum", &["-a", "256"])
+    } else {
+        ("sha256sum", &[])
+    };
+
+    let out = std::process::Command::new(prog)
+        .args(args)
+        .arg(path)
+        .output()
+        .with_context(|| format!("failed to run {prog}"))?;
+
+    anyhow::ensure!(
+        out.status.success(),
+        "{prog} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let text = String::from_utf8_lossy(&out.stdout);
+    let hash = text
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("empty {prog} output"))?
+        .to_string();
+    Ok(hash)
 }
 
 /// Check if the parent directory is writable by the current user.

@@ -1,6 +1,7 @@
 //! Browse insights in a scrollable TUI.
 
 use crate::db::SearchResult;
+use crate::sanitize::strip_display_controls;
 use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
@@ -46,6 +47,20 @@ pub fn run_browse(insights: Vec<SearchResult>, repo_name: &str) -> Result<()> {
         println!("No insights to browse. Run `diwa index` first.");
         return Ok(());
     }
+
+    // Insight text flows from commit messages via Claude into the terminal
+    // renderer; strip control chars up front so no rendering path has to
+    // think about ANSI hijacking.
+    let insights: Vec<SearchResult> = insights
+        .into_iter()
+        .map(|r| SearchResult {
+            category: strip_display_controls(&r.category),
+            title: strip_display_controls(&r.title),
+            body: strip_display_controls(&r.body),
+            tags: strip_display_controls(&r.tags),
+            ..r
+        })
+        .collect();
 
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;

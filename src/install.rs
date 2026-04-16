@@ -6,9 +6,10 @@
 //! (no ORT init, no DB open) and naturally debounces bursty activity
 //! like `git pull` landing many commits at once.
 
-use anyhow::{Context, Result};
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use anyhow::{anyhow, Context, Result};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// Hooks we install. `post-commit` covers local commits; `post-merge`
@@ -50,24 +51,48 @@ fn install_single_hook(hook_path: &Path) -> Result<()> {
         .collect::<Vec<_>>()
         .join("\n");
 
-    if hook_path.exists() {
-        let existing = fs::read_to_string(hook_path)?;
+    // Refuse to follow a symlink at hook_path. If the repo contains a hostile
+    // .husky/post-commit → ~/.ssh/authorized_keys symlink, a plain fs::write
+    // would clobber the link target. Reject symlinks before touching anything.
+    if let Ok(meta) = fs::symlink_metadata(hook_path) {
+        if meta.file_type().is_symlink() {
+            return Err(anyhow!(
+                "refusing to write hook {}: path is a symlink",
+                hook_path.display()
+            ));
+        }
+    }
 
+    let new_contents = if hook_path.exists() {
+        let existing = fs::read_to_string(hook_path)?;
         if existing.contains(DIWA_MARKER) {
-            // Replace existing diwa block in place.
-            let updated = replace_diwa_block(&existing, &diwa_block);
-            fs::write(hook_path, updated)?;
+            replace_diwa_block(&existing, &diwa_block)
         } else {
-            let appended = format!("{}\n\n{}\n", existing.trim_end(), diwa_block);
-            fs::write(hook_path, appended)?;
+            format!("{}\n\n{}\n", existing.trim_end(), diwa_block)
         }
     } else {
-        fs::write(hook_path, HOOK_BODY)?;
-    }
+        HOOK_BODY.to_string()
+    };
+
+    write_file_nofollow(hook_path, new_contents.as_bytes())?;
 
     let mut perms = fs::metadata(hook_path)?.permissions();
     perms.set_mode(0o755);
     fs::set_permissions(hook_path, perms)?;
+    Ok(())
+}
+
+/// Open a file with O_NOFOLLOW so a symlink planted between our check and
+/// the write can't redirect the write to a file outside the hooks dir.
+fn write_file_nofollow(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut f = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .with_context(|| format!("opening {} with O_NOFOLLOW", path.display()))?;
+    f.write_all(bytes)?;
     Ok(())
 }
 
@@ -324,7 +349,12 @@ pub fn repair_shadowed_binaries() -> Vec<ShadowRepair> {
     };
     let current_canon = current.canonicalize().unwrap_or_else(|_| current.clone());
 
-    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    // Resolve $HOME all the way through symlinks so the containment check
+    // compares real paths, not symlinked ones.
+    let home_canon = std::env::var("HOME")
+        .ok()
+        .map(PathBuf::from)
+        .and_then(|h| h.canonicalize().ok());
     let path_var = match std::env::var_os("PATH") {
         Some(p) => p,
         None => return Vec::new(),
@@ -336,6 +366,21 @@ pub fn repair_shadowed_binaries() -> Vec<ShadowRepair> {
         if !candidate.exists() {
             continue;
         }
+
+        // Refuse to touch symlinks. A symlink planted on PATH pointing at a
+        // real binary elsewhere is not something we should silently rename
+        // aside — the user's intent is unclear and the canonical target is
+        // probably the actual diwa install.
+        if let Ok(meta) = fs::symlink_metadata(&candidate) {
+            if meta.file_type().is_symlink() {
+                results.push(ShadowRepair::Warned {
+                    shadow: candidate,
+                    reason: "shadow is a symlink — remove manually",
+                });
+                continue;
+            }
+        }
+
         let candidate_canon = candidate
             .canonicalize()
             .unwrap_or_else(|_| candidate.clone());
@@ -356,9 +401,14 @@ pub fn repair_shadowed_binaries() -> Vec<ShadowRepair> {
             continue;
         }
 
-        let in_home = home
+        // Containment is checked against the canonical path so symlinks in
+        // the PATH entry (including macOS's /var → /private/var) don't
+        // produce spurious mismatches. We already refused to touch a
+        // candidate that is itself a symlink, so the regular-file case
+        // cannot escape $HOME after canonicalization.
+        let in_home = home_canon
             .as_ref()
-            .map(|h| candidate.starts_with(h))
+            .map(|h| candidate_canon.starts_with(h))
             .unwrap_or(false);
         if !in_home {
             results.push(ShadowRepair::Warned {
