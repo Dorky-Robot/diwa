@@ -1,4 +1,5 @@
 [package]
+license = "MIT OR Apache-2.0"
 name = "diwa"
 version = "0.5.1"
 edition = "2021"
