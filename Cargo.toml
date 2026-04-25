@@ -1,7 +1,7 @@
 [package]
 license = "MIT OR Apache-2.0"
 name = "diwa"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 description = "Semantic git history index — extract the deeper meaning from your codebase"
 

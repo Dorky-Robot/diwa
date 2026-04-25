@@ -141,6 +141,14 @@ pub fn install() -> Result<()> {
     fs::create_dir_all(&diwa)?;
     fs::create_dir_all(diwa.join("queue"))?;
 
+    // Ad-hoc sign before launchd grabs the binary. macOS TCC tracks
+    // unsigned LaunchAgents by path+cdhash and re-prompts speculatively
+    // (Photos / Contacts / Calendar) every time the binary is replaced —
+    // a stable ad-hoc identity quiets that. We don't auto-escalate to
+    // sudo here: `daemon install` is interactive, and a hint is friendlier
+    // than a surprise password prompt when the binary is root-owned.
+    codesign_adhoc_best_effort(&exe, false);
+
     let log_path = diwa.join("daemon.log");
     let path_env = build_daemon_path();
     let ort_dylib_env = find_ort_dylib();
@@ -218,6 +226,83 @@ pub fn install() -> Result<()> {
     println!("Loaded LaunchAgent {PLIST_LABEL}");
     println!("Logs: {}", log_path.display());
     Ok(())
+}
+
+/// Bootout the LaunchAgent if currently loaded. Used during `diwa upgrade`
+/// to release the running daemon's hold on the old binary cleanly before
+/// the new tarball is written into place — without this, the running
+/// daemon keeps the old inode mapped while a new binary appears at the
+/// same path, which is the exact condition that triggers macOS TCC to
+/// re-prompt for Photos / Contacts / Calendar on Sonoma+. No-op on
+/// non-macOS or if the agent isn't installed.
+pub fn bootout_if_loaded() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let Ok(plist_file) = plist_path() else {
+        return;
+    };
+    if !plist_file.exists() {
+        return;
+    }
+    let Ok(uid) = current_uid() else {
+        return;
+    };
+    let domain = format!("gui/{uid}");
+    let _ = Command::new("launchctl")
+        .args(["bootout", &domain, &plist_file.to_string_lossy()])
+        .status();
+}
+
+/// Ad-hoc code-sign a binary so macOS TCC has a stable cdhash to track.
+/// Without this, the unsigned LaunchAgent binary that gets swapped in by
+/// `diwa upgrade` / `brew upgrade diwa` triggers speculative Photos /
+/// Contacts / Calendar prompts on Sonoma+. Ad-hoc signing is free (no
+/// Developer ID required) and silences those prompts.
+///
+/// `use_sudo` should be true when the caller already prompted for sudo
+/// for an adjacent step (e.g. `cmd_upgrade` doing a `sudo cp` into
+/// /usr/local/bin) — sudo's auth ticket is still warm so codesign won't
+/// re-prompt. Pass false from non-sudo contexts; if the binary is
+/// root-owned the sign attempt will fail and we hint at the manual fix
+/// rather than escalating silently.
+///
+/// Best-effort: a permission failure becomes a soft hint, not a hard
+/// error — TCC prompts are annoying but non-blocking, so a noisy failure
+/// here would be worse than the prompts themselves. No-op on non-macOS.
+pub fn codesign_adhoc_best_effort(path: &Path, use_sudo: bool) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+
+    let mut cmd = if use_sudo {
+        let mut c = Command::new("sudo");
+        c.arg("codesign");
+        c
+    } else {
+        Command::new("codesign")
+    };
+
+    let result = cmd
+        .args([
+            "--sign",
+            "-",
+            "--force",
+            "--preserve-metadata=entitlements,flags",
+        ])
+        .arg(path)
+        .output();
+
+    if matches!(&result, Ok(out) if out.status.success()) {
+        return;
+    }
+
+    eprintln!(
+        "Note: could not ad-hoc sign {0}. Run\n  \
+         sudo codesign --sign - --force --preserve-metadata=entitlements,flags {0}\n\
+         once to silence macOS TCC prompts (Photos / Contacts) on the unsigned binary.",
+        path.display()
+    );
 }
 
 pub fn uninstall() -> Result<()> {

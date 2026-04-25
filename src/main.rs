@@ -1205,6 +1205,13 @@ fn cmd_upgrade() -> Result<()> {
     let dest = install_dir.join("diwa");
     let needs_sudo = !is_writable(&dest);
 
+    // Take down the LaunchAgent before swapping the binary on disk.
+    // Without this, the running daemon keeps the old inode mapped while a
+    // new binary appears at the same path — and that exact pattern is
+    // what trips macOS TCC into re-prompting (Photos / Contacts / Calendar)
+    // on Sonoma+. We bootstrap a fresh process from the new binary below.
+    daemon::bootout_if_loaded();
+
     if needs_sudo {
         eprintln!("Installing to {} (requires sudo)...", install_dir.display());
         let cp = std::process::Command::new("sudo")
@@ -1233,6 +1240,18 @@ fn cmd_upgrade() -> Result<()> {
     }
 
     // tempfile::TempDir cleans up on drop — nothing to do here.
+
+    // Ad-hoc sign and bring the daemon back up against the new binary.
+    // The sign step gives macOS a stable cdhash so TCC stops treating
+    // each upgrade as an "unknown binary" event; the bootstrap is the
+    // counterpart to bootout_if_loaded() above.
+    if cfg!(target_os = "macos") {
+        daemon::codesign_adhoc_best_effort(&dest, needs_sudo);
+        if let Err(e) = daemon::install() {
+            eprintln!("Warning: could not reload LaunchAgent ({e:#}). Run `diwa daemon install` to retry.");
+        }
+    }
+
     eprintln!("Upgraded to v{latest}.");
 
     // Intel Mac uses the load-dynamic build — ensure onnxruntime is present.
