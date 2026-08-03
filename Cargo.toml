@@ -1,7 +1,7 @@
 [package]
 license = "MIT OR Apache-2.0"
 name = "diwa"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 description = "Semantic git history index — extract the deeper meaning from your codebase"
 
@@ -17,7 +17,10 @@ load-dynamic = ["fastembed/ort-load-dynamic"]
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 clap = { version = "4", features = ["derive"] }
-fastembed = "5.13"
+fastembed = { version = "5.13", default-features = false, features = [
+    "ort-download-binaries-native-tls",
+    "hf-hub-native-tls",
+] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 crossterm = "0.28"
