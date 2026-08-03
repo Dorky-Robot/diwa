@@ -151,12 +151,7 @@ fn remove_stale_hooks(repo_path: &Path, active_hooks_dir: &Path) {
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
 
     let git_dir_output = std::process::Command::new("git")
-        .args([
-            "-C",
-            &repo_path.to_string_lossy(),
-            "rev-parse",
-            "--git-dir",
-        ])
+        .args(["-C", &repo_path.to_string_lossy(), "rev-parse", "--git-dir"])
         .output();
     if let Ok(output) = git_dir_output {
         if output.status.success() {
@@ -170,7 +165,10 @@ fn remove_stale_hooks(repo_path: &Path, active_hooks_dir: &Path) {
         }
     }
 
-    for name in &[".husky"] {
+    // `.husky/_` is where older diwa versions landed on husky v9 repos, before
+    // we learned that directory is regenerated. Sweep it so the doomed copy
+    // doesn't linger next to the one that works.
+    for name in &[".husky", ".husky/_"] {
         candidates.push(repo_path.join(name));
     }
 
@@ -179,7 +177,9 @@ fn remove_stale_hooks(repo_path: &Path, active_hooks_dir: &Path) {
         .unwrap_or_else(|_| active_hooks_dir.to_path_buf());
 
     for candidate in candidates {
-        let canon_candidate = candidate.canonicalize().unwrap_or_else(|_| candidate.clone());
+        let canon_candidate = candidate
+            .canonicalize()
+            .unwrap_or_else(|_| candidate.clone());
         if canon_candidate == canon_active {
             continue;
         }
@@ -260,6 +260,32 @@ pub fn uninstall_hook(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Map husky v9's generated `.husky/_` onto the user-owned `.husky/`.
+///
+/// husky v8 set `core.hooksPath=.husky` — a directory the user owns. v9 sets
+/// it to `.husky/_`, which husky REGENERATES on every `husky install`. A hook
+/// written there is deleted by the next `npm install`, silently: git still
+/// finds the regenerated wrapper, the wrapper finds no user hook, and it
+/// `exit 0`s. Nothing logs, nothing fails, and indexing just stops.
+///
+/// Returns the parent for a husky-generated `_`, and the path unchanged for
+/// anything else — a repo whose hooks genuinely live in a directory named `_`
+/// keeps them there, since we only redirect when husky's own marker files
+/// (`h` in v9, `husky.sh` in v8) are present alongside.
+fn redirect_husky_generated_dir(path: PathBuf) -> PathBuf {
+    if path.file_name().and_then(|n| n.to_str()) != Some("_") {
+        return path;
+    }
+    let looks_like_husky = path.join("h").exists() || path.join("husky.sh").exists();
+    if !looks_like_husky {
+        return path;
+    }
+    match path.parent() {
+        Some(parent) => parent.to_path_buf(),
+        None => path,
+    }
+}
+
 /// Exposed for testing.
 pub fn find_hooks_dir(repo_path: &Path) -> Result<std::path::PathBuf> {
     // Check for custom hooksPath (e.g. .husky).
@@ -282,6 +308,18 @@ pub fn find_hooks_dir(repo_path: &Path) -> Result<std::path::PathBuf> {
             } else {
                 repo_path.join(&custom)
             };
+
+            // husky v9 points core.hooksPath at `.husky/_`, which is husky's
+            // BUILD OUTPUT — regenerated on every `husky install`, i.e. on
+            // every `npm install`. Installing there is not wrong so much as
+            // impermanent: the hook works until the next npm install silently
+            // deletes it, and nothing reports the loss. That is exactly how
+            // Dorky-Robot/kita went 1318 commits without being indexed.
+            //
+            // Redirect to the parent, which is husky's user-owned directory.
+            // The generated `_/<hook>` wrapper execs `../<hook>` if it exists,
+            // so the hook still fires — and now it survives regeneration.
+            let custom_path = redirect_husky_generated_dir(custom_path);
 
             // Verify the path is writable. If core.hooksPath points to a
             // non-existent or read-only location (e.g. a stale Docker mount
@@ -331,7 +369,10 @@ pub enum ShadowRepair {
     Repaired { shadow: PathBuf, backup: PathBuf },
     /// Something shadows us but we won't touch it (system path, or it isn't
     /// obviously stale). Caller should leave a breadcrumb for the user.
-    Warned { shadow: PathBuf, reason: &'static str },
+    Warned {
+        shadow: PathBuf,
+        reason: &'static str,
+    },
 }
 
 /// Detect and repair stale `diwa` binaries earlier on `$PATH` than the

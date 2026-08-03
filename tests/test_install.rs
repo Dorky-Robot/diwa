@@ -183,6 +183,79 @@ fn test_custom_hooks_path() {
     assert!(hook_path.exists());
 }
 
+/// husky v9 points core.hooksPath at `.husky/_`, which husky regenerates on
+/// every `npm install`. A hook installed there is deleted by the next one,
+/// silently — the regenerated wrapper finds no user hook and exits 0. So we
+/// install into the user-owned parent, which the wrapper still execs.
+#[test]
+fn test_husky_v9_generated_dir_redirects_to_parent() {
+    let repo = make_git_repo();
+    let generated = repo.path().join(".husky/_");
+    fs::create_dir_all(&generated).unwrap();
+    // husky's own marker file — this is what tells us `_` is generated.
+    fs::write(generated.join("h"), "#!/usr/bin/env sh\n").unwrap();
+
+    Command::new("git")
+        .args([
+            "-C",
+            repo.path().to_str().unwrap(),
+            "config",
+            "core.hooksPath",
+            ".husky/_",
+        ])
+        .output()
+        .unwrap();
+
+    let _ = Command::new(diwa_bin())
+        .args(["init", repo.path().to_str().unwrap()])
+        .output();
+
+    // Lands in the user-owned dir, which survives `husky install`...
+    let survives = repo.path().join(".husky/post-commit");
+    assert!(
+        survives.exists(),
+        "hook should install into .husky/, not the regenerated .husky/_"
+    );
+    assert!(fs::read_to_string(&survives)
+        .unwrap()
+        .contains("diwa enqueue"));
+
+    // ...and NOT in the directory husky will overwrite.
+    assert!(
+        !generated.join("post-commit").exists(),
+        "hook must not be written into husky's generated _ directory"
+    );
+}
+
+/// Only redirect when husky's marker files are actually there — a repo that
+/// genuinely keeps its hooks in a directory named `_` must be left alone.
+#[test]
+fn test_bare_underscore_hooks_dir_is_not_redirected() {
+    let repo = make_git_repo();
+    let underscore = repo.path().join("_");
+    fs::create_dir_all(&underscore).unwrap();
+
+    Command::new("git")
+        .args([
+            "-C",
+            repo.path().to_str().unwrap(),
+            "config",
+            "core.hooksPath",
+            "_",
+        ])
+        .output()
+        .unwrap();
+
+    let _ = Command::new(diwa_bin())
+        .args(["init", repo.path().to_str().unwrap()])
+        .output();
+
+    assert!(
+        underscore.join("post-commit").exists(),
+        "a non-husky `_` hooks dir should still receive the hook"
+    );
+}
+
 #[test]
 fn test_update_renames_stale_shadow_in_home() {
     // Simulates the `~/.local/bin/diwa` (pre-0.4.0) shadowing the installed
@@ -205,11 +278,7 @@ fn test_update_renames_stale_shadow_in_home() {
 
     // Put the shadow *before* the real diwa on PATH.
     let real_dir = diwa_bin().parent().unwrap().to_path_buf();
-    let path = format!(
-        "{}:{}",
-        shadow_dir.display(),
-        real_dir.display(),
-    );
+    let path = format!("{}:{}", shadow_dir.display(), real_dir.display(),);
 
     let output = Command::new(diwa_bin())
         .env("HOME", home.path())
