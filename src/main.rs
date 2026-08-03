@@ -14,6 +14,7 @@ mod reflect;
 mod repo;
 mod sanitize;
 mod spinner;
+mod staleness;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -582,6 +583,28 @@ pub(crate) fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reind
     Ok(())
 }
 
+/// Emit the staleness warning for `slug`, if there is one to emit.
+///
+/// Best-effort by design: no manifest entry, no last-indexed sha, or a repo
+/// path that has moved all mean we simply say nothing. A warning we cannot
+/// substantiate would train people to ignore the ones we can.
+fn warn_if_stale(diwa: &Path, slug: &str, db: &db::IndexDb) {
+    let Some(path) = manifest::read_manifest(diwa).get(slug).cloned() else {
+        return;
+    };
+    if !path.exists() {
+        return;
+    }
+    let Ok(Some(sha)) = db.last_indexed_sha() else {
+        return;
+    };
+    // Slugs are stored `owner--name`; show the repo the way people say it.
+    let display = slug.replacen("--", "/", 1);
+    if let Some(msg) = staleness::warning(&display, &staleness::check(&path, &sha)) {
+        eprintln!("{msg}\n");
+    }
+}
+
 fn run_search(
     repo_arg: &str,
     query: &str,
@@ -592,6 +615,10 @@ fn run_search(
     let diwa = diwa_dir();
     let slug = resolve_slug(repo_arg)?;
     let db = db::IndexDb::open(&diwa, &slug)?;
+
+    // A stale index answers confidently and obsoletely, so say so BEFORE the
+    // results — and on stderr, so `--json` stdout stays parseable for agents.
+    warn_if_stale(&diwa, &slug, &db);
 
     // Deep search: agentic research loop — Claude plans, investigates, synthesizes.
     if deep {
