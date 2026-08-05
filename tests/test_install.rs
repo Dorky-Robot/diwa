@@ -373,9 +373,19 @@ fn test_read_commands_do_not_touch_hooks() {
     fs::create_dir_all(husky.join("_")).unwrap();
     fs::write(husky.join("_/h"), "#!/usr/bin/env sh\n").unwrap();
     let hook = husky.join("post-commit");
-    fs::write(&hook, "#!/usr/bin/env sh\n\n# diwa: enqueue repo for indexing\ndiwa enqueue . &\n").unwrap();
+    fs::write(
+        &hook,
+        "#!/usr/bin/env sh\n\n# diwa: enqueue repo for indexing\ndiwa enqueue . &\n",
+    )
+    .unwrap();
     Command::new("git")
-        .args(["-C", repo.path().to_str().unwrap(), "config", "core.hooksPath", ".husky/_"])
+        .args([
+            "-C",
+            repo.path().to_str().unwrap(),
+            "config",
+            "core.hooksPath",
+            ".husky/_",
+        ])
         .output()
         .unwrap();
 
@@ -384,7 +394,11 @@ fn test_read_commands_do_not_touch_hooks() {
         format!(r#"{{"Test--repo":"{}"}}"#, repo.path().display()),
     )
     .unwrap();
-    fs::write(diwa_home.path().join("meta.json"), r#"{"last_migrated_version":"0.0.1"}"#).unwrap();
+    fs::write(
+        diwa_home.path().join("meta.json"),
+        r#"{"last_migrated_version":"0.0.1"}"#,
+    )
+    .unwrap();
 
     let before = fs::read_to_string(&hook).unwrap();
 

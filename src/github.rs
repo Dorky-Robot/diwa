@@ -75,8 +75,8 @@ fn fetch_merged_prs(repo: &str, limit: usize) -> Result<Vec<PrData>> {
         anyhow::bail!("gh pr list failed: {}", stderr.trim());
     }
 
-    let parsed: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout)
-        .context("gh pr list returned invalid JSON")?;
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_slice(&output.stdout).context("gh pr list returned invalid JSON")?;
 
     Ok(parsed
         .into_iter()

@@ -616,9 +616,9 @@ impl IndexDb {
     /// Return the set of commit SHAs that already have insights in the DB.
     /// Used to make indexing idempotent — skip commits we've already processed.
     pub fn indexed_shas(&self) -> Result<std::collections::HashSet<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT DISTINCT commit_sha FROM insights WHERE source_type != 'reflection'")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT commit_sha FROM insights WHERE source_type != 'reflection'",
+        )?;
         let shas = stmt
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<Result<std::collections::HashSet<_>, _>>()?;
@@ -755,7 +755,7 @@ mod tests {
         let db = IndexDb::open_memory().unwrap();
         let insight = sample_insight();
         let embedding = vec![0.5f32, 0.3, 0.1, 0.8];
-        db.insert_insights_with_embeddings(&[insight], Some(&[embedding.clone()]))
+        db.insert_insights_with_embeddings(&[insight], Some(std::slice::from_ref(&embedding)))
             .unwrap();
 
         // Search with similar embedding.
@@ -954,8 +954,8 @@ mod tests {
         let insight = sample_insight();
 
         // Insert the same insight three times.
-        db.insert_insights(&[insight.clone()]).unwrap();
-        db.insert_insights(&[insight.clone()]).unwrap();
+        db.insert_insights(std::slice::from_ref(&insight)).unwrap();
+        db.insert_insights(std::slice::from_ref(&insight)).unwrap();
         db.insert_insights(&[insight]).unwrap();
 
         // Should only have one row.
@@ -972,8 +972,11 @@ mod tests {
         let insight = sample_insight();
         let emb = vec![0.1f32; 4];
 
-        db.insert_insights_with_embeddings(&[insight.clone()], Some(&[emb.clone()]))
-            .unwrap();
+        db.insert_insights_with_embeddings(
+            std::slice::from_ref(&insight),
+            Some(std::slice::from_ref(&emb)),
+        )
+        .unwrap();
         db.insert_insights_with_embeddings(&[insight], Some(&[emb]))
             .unwrap();
 
@@ -1020,7 +1023,8 @@ mod tests {
             ).unwrap();
         }
         assert_eq!(
-            conn.query_row("SELECT COUNT(*) FROM insights", [], |r| r.get::<_, i64>(0)).unwrap(),
+            conn.query_row("SELECT COUNT(*) FROM insights", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
             3
         );
         drop(conn);

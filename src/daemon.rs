@@ -209,10 +209,15 @@ pub fn install() -> Result<()> {
     let uid = current_uid()?;
     let domain = format!("gui/{uid}");
 
-    // Ignore bootout errors — it fails if not currently loaded.
+    // Ignore bootout failures — the agent may simply not be loaded. Use
+    // `output()` rather than `status()` so launchctl's stderr is CAPTURED,
+    // not spilled onto the user's terminal: it prints "Boot-out failed: 5:
+    // Input/output error" in cases we have already decided are fine, and a
+    // scary red line next to a successful upgrade sends people hunting a bug
+    // that isn't there. (It did exactly that on 2026-08-05, for about an hour.)
     let _ = Command::new("launchctl")
         .args(["bootout", &domain, &plist_file.to_string_lossy()])
-        .status();
+        .output();
 
     let status = Command::new("launchctl")
         .args(["bootstrap", &domain, &plist_file.to_string_lossy()])
@@ -249,9 +254,10 @@ pub fn bootout_if_loaded() {
         return;
     };
     let domain = format!("gui/{uid}");
+    // Captured, not printed — see the note in `install()`.
     let _ = Command::new("launchctl")
         .args(["bootout", &domain, &plist_file.to_string_lossy()])
-        .status();
+        .output();
 }
 
 /// Ad-hoc code-sign a binary so macOS TCC has a stable cdhash to track.
@@ -327,9 +333,11 @@ pub fn uninstall() -> Result<()> {
     let domain = format!("gui/{uid}");
 
     if plist_file.exists() {
+        // Captured, not printed — see the note in `install()`. The plist is
+        // removed either way, so a bootout error here is unactionable.
         let _ = Command::new("launchctl")
             .args(["bootout", &domain, &plist_file.to_string_lossy()])
-            .status();
+            .output();
         fs::remove_file(&plist_file)?;
         println!("Removed {}", plist_file.display());
     } else {
@@ -387,9 +395,13 @@ fn plist_path() -> Result<PathBuf> {
 }
 
 fn current_uid() -> Result<u32> {
-    let output = Command::new("id").arg("-u").output().context("id -u failed")?;
+    let output = Command::new("id")
+        .arg("-u")
+        .output()
+        .context("id -u failed")?;
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    text.parse().with_context(|| format!("couldn't parse uid: {text}"))
+    text.parse()
+        .with_context(|| format!("couldn't parse uid: {text}"))
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -414,7 +426,7 @@ fn diwa_dir() -> PathBuf {
 /// Returns the first path found, or `None` if the library isn't installed.
 fn find_ort_dylib() -> Option<String> {
     for path in [
-        "/usr/local/lib/libonnxruntime.dylib",   // Intel Homebrew
+        "/usr/local/lib/libonnxruntime.dylib",    // Intel Homebrew
         "/opt/homebrew/lib/libonnxruntime.dylib", // Apple Silicon Homebrew
     ] {
         if std::path::Path::new(path).exists() {

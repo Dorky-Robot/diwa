@@ -114,7 +114,14 @@ pub fn auto_migrate_if_needed(diwa_dir: &Path) {
         return;
     }
 
-    eprintln!("diwa v{current}: migrating from v{}…", if last.is_empty() { "<old>" } else { last.as_str() });
+    eprintln!(
+        "diwa v{current}: migrating from v{}…",
+        if last.is_empty() {
+            "<old>"
+        } else {
+            last.as_str()
+        }
+    );
     if let Err(e) = run(diwa_dir) {
         eprintln!("Warning: auto-migration failed: {e:#}");
     }

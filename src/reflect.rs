@@ -26,10 +26,9 @@ pub fn should_reflect(
         return true;
     }
 
-    match try_should_reflect(new_insights, existing_reflections) {
-        Ok(should) => should,
-        Err(_) => false, // If Claude is unavailable, skip.
-    }
+    // Skip reflection when Claude is unavailable — deliberately "don't
+    // reflect", not "fall back to a default". Same value, different meaning.
+    try_should_reflect(new_insights, existing_reflections).unwrap_or(false)
 }
 
 fn try_should_reflect(

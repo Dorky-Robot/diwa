@@ -19,8 +19,8 @@ fn ensure_ort_dylib() {
         return; // user already set it — respect their choice
     }
     let candidates = [
-        "/usr/local/lib/libonnxruntime.dylib",       // Intel Homebrew
-        "/opt/homebrew/lib/libonnxruntime.dylib",     // Apple Silicon Homebrew
+        "/usr/local/lib/libonnxruntime.dylib",    // Intel Homebrew
+        "/opt/homebrew/lib/libonnxruntime.dylib", // Apple Silicon Homebrew
     ];
     for path in candidates {
         if std::path::Path::new(path).exists() {
@@ -80,11 +80,7 @@ pub fn embed(text: &str) -> Result<Vec<f32>> {
 
 /// Generate embeddings for multiple texts.
 pub fn embed_batch(texts: &[String]) -> Result<Vec<Vec<f32>>> {
-    with_model(|model| {
-        model
-            .embed(texts.to_vec(), None)
-            .context("batch embedding failed")
-    })
+    with_model(|model| model.embed(texts, None).context("batch embedding failed"))
 }
 
 /// Cosine similarity between two vectors.

@@ -383,8 +383,7 @@ fn run_git_log(args: &str, repo_path: Option<&Path>) -> Result<String> {
 
 fn is_plausible_sha(s: &str) -> bool {
     let trimmed = s.trim();
-    (4..=64).contains(&trimmed.len())
-        && trimmed.chars().all(|c| c.is_ascii_hexdigit())
+    (4..=64).contains(&trimmed.len()) && trimmed.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn partition_git_log_args(args: &str) -> (Vec<String>, Vec<String>) {

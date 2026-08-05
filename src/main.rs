@@ -193,6 +193,10 @@ fn main() {
     }
 }
 
+/// What one indexing batch hands back to the pipeline: the insights Claude
+/// extracted, their embeddings, and the batch's last SHA (the new watermark).
+type BatchPayload = anyhow::Result<(Vec<db::Insight>, Vec<Vec<f32>>, String)>;
+
 fn run(cli: Cli) -> Result<()> {
     // Self-heal: if diwa was just upgraded past a version that changed the
     // hook/daemon shape, re-run migrate transparently.
@@ -362,7 +366,12 @@ fn resolve_slug(repo_arg: &str) -> Result<String> {
     anyhow::bail!("No indexed repo matching '{repo_arg}'. Run `diwa index` in the repo first.")
 }
 
-pub(crate) fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reindex: bool) -> Result<()> {
+pub(crate) fn run_index(
+    dir: &Path,
+    max_commits: usize,
+    batch_size: usize,
+    reindex: bool,
+) -> Result<()> {
     let diwa = diwa_dir();
     std::fs::create_dir_all(&diwa)?;
 
@@ -445,9 +454,7 @@ pub(crate) fn run_index(dir: &Path, max_commits: usize, batch_size: usize, reind
     let mut total_insights = 0;
 
     // Pipeline: while Claude processes batch N+1, embed + store batch N in a background thread.
-    let mut pending: Option<
-        std::thread::JoinHandle<anyhow::Result<(Vec<db::Insight>, Vec<Vec<f32>>, String)>>,
-    > = None;
+    let mut pending: Option<std::thread::JoinHandle<BatchPayload>> = None;
 
     for (i, batch) in batches.iter().enumerate() {
         print!("  Batch {}/{total_batches}...", i + 1);
@@ -1164,8 +1171,8 @@ fn cmd_upgrade() -> Result<()> {
         "failed to check for updates — could not reach GitHub"
     );
 
-    let release: GithubRelease = serde_json::from_slice(&output.stdout)
-        .context("could not parse GitHub release JSON")?;
+    let release: GithubRelease =
+        serde_json::from_slice(&output.stdout).context("could not parse GitHub release JSON")?;
     let tag = release.tag_name;
     let latest = tag.strip_prefix('v').unwrap_or(&tag);
 
@@ -1227,10 +1234,7 @@ fn cmd_upgrade() -> Result<()> {
 
     // diwa archives contain the binary directly (no subdirectory)
     let extracted = tmpdir.join("diwa");
-    anyhow::ensure!(
-        extracted.exists(),
-        "diwa binary not found in archive"
-    );
+    anyhow::ensure!(extracted.exists(), "diwa binary not found in archive");
 
     // Replace current binary
     let current_exe = std::env::current_exe()?;
@@ -1311,9 +1315,8 @@ fn cmd_upgrade() -> Result<()> {
 /// there is an arbitrary-code-execution primitive for anyone who can MitM
 /// the GitHub download or compromise the release assets.
 fn verify_checksum(tarball: &Path, target: &str, tag: &str) -> Result<()> {
-    let sums_url = format!(
-        "https://github.com/Dorky-Robot/diwa/releases/download/{tag}/SHA256SUMS"
-    );
+    let sums_url =
+        format!("https://github.com/Dorky-Robot/diwa/releases/download/{tag}/SHA256SUMS");
 
     let sums_body = std::process::Command::new("curl")
         .args([
