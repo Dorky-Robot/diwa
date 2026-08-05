@@ -353,3 +353,57 @@ fn test_stale_hooks_path_fallback() {
     let hook_path = repo.path().join(".git/hooks/post-commit");
     assert!(hook_path.exists());
 }
+
+/// A READ must not rewrite git hooks.
+///
+/// Regression for 2026-08-05: auto-migration was gated by a SKIP-list, so any
+/// command not explicitly excluded — `search`, `stats`, `ls`, `browse` — would
+/// run a full migrate across every registered repo the first time it ran after
+/// an upgrade. A bare `diwa stats kita` deleted that repo's
+/// .husky/post-commit: a diagnostic command destroying the thing it was asked
+/// to report on. The gate is now an allow-list; these commands must be inert.
+#[test]
+fn test_read_commands_do_not_touch_hooks() {
+    let repo = make_git_repo();
+    let diwa_home = TempDir::new().unwrap();
+
+    // A repo carrying a diwa hook, registered in the manifest, with a STALE
+    // version stamp so migration would fire if anything let it.
+    let husky = repo.path().join(".husky");
+    fs::create_dir_all(husky.join("_")).unwrap();
+    fs::write(husky.join("_/h"), "#!/usr/bin/env sh\n").unwrap();
+    let hook = husky.join("post-commit");
+    fs::write(&hook, "#!/usr/bin/env sh\n\n# diwa: enqueue repo for indexing\ndiwa enqueue . &\n").unwrap();
+    Command::new("git")
+        .args(["-C", repo.path().to_str().unwrap(), "config", "core.hooksPath", ".husky/_"])
+        .output()
+        .unwrap();
+
+    fs::write(
+        diwa_home.path().join("repos.json"),
+        format!(r#"{{"Test--repo":"{}"}}"#, repo.path().display()),
+    )
+    .unwrap();
+    fs::write(diwa_home.path().join("meta.json"), r#"{"last_migrated_version":"0.0.1"}"#).unwrap();
+
+    let before = fs::read_to_string(&hook).unwrap();
+
+    for args in [vec!["ls"], vec!["stats"], vec!["search", "anything"]] {
+        let _ = Command::new(diwa_bin())
+            .args(&args)
+            .env("DIWA_DIR", diwa_home.path())
+            .current_dir(repo.path())
+            .output();
+        assert!(
+            hook.exists(),
+            "`diwa {}` deleted .husky/post-commit — reads must not mutate",
+            args[0]
+        );
+        assert_eq!(
+            fs::read_to_string(&hook).unwrap(),
+            before,
+            "`diwa {}` rewrote .husky/post-commit — reads must not mutate",
+            args[0]
+        );
+    }
+}

@@ -194,19 +194,28 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    // Self-heal: if diwa was just upgraded past a version that changed
-    // the hook/daemon shape, re-run migrate transparently. Skipped for
-    // hot-path and self-referential commands.
-    let skip_auto_migrate = matches!(
+    // Self-heal: if diwa was just upgraded past a version that changed the
+    // hook/daemon shape, re-run migrate transparently.
+    //
+    // This is an ALLOW-list on purpose. It used to be a skip-list, which meant
+    // every command not explicitly excluded could rewrite git hooks in EVERY
+    // registered repo — including `search`, `stats`, `ls` and `browse`, which
+    // a user reasonably believes are reads. On 2026-08-05 a bare
+    // `diwa stats kita` fired the 0.5.1→0.5.2 migration and DELETED the repo's
+    // .husky/post-commit, i.e. a diagnostic command destroyed the thing being
+    // diagnosed. Reads must not mutate. Only commands whose whole job is
+    // installation may migrate.
+    let may_auto_migrate = matches!(
         cli.command,
-        Commands::Enqueue { .. }
-            | Commands::Migrate
-            | Commands::Upgrade
+        Commands::Init { .. }
+            | Commands::Index { .. }
+            | Commands::Reindex { .. }
+            | Commands::Update
             | Commands::Daemon {
-                action: DaemonAction::Run
+                action: DaemonAction::Install
             }
     );
-    if !skip_auto_migrate {
+    if may_auto_migrate {
         migrate::auto_migrate_if_needed(&diwa_dir());
     }
 
