@@ -88,9 +88,25 @@ pub fn check(repo_path: &Path, last_indexed: &str) -> Staleness {
         };
     }
 
-    let commits = git(&["rev-list", "--count", &format!("{last_indexed}..HEAD")])
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(0);
+    // `--no-merges` must match what the INDEXER walks (git.rs's commit list uses
+    // the same flag). Without it the two disagree about what a commit is, and
+    // the gap counts commits indexing will never consume: a merge between the
+    // watermark and HEAD makes the banner permanently non-zero, and a merge AT
+    // HEAD means it can never reach zero at all. Observed on Dorky-Robot/kita —
+    // "10 commits BEHIND" against 7 indexable ones, telling the user to run a
+    // catch-up that could not possibly clear it.
+    //
+    // A warning you cannot clear by obeying it is worse than no warning: it
+    // teaches people that this banner is noise, and the next one — the real
+    // one — gets skipped with it. That is the entire value of this module.
+    let commits = git(&[
+        "rev-list",
+        "--count",
+        "--no-merges",
+        &format!("{last_indexed}..HEAD"),
+    ])
+    .and_then(|s| s.parse::<usize>().ok())
+    .unwrap_or(0);
 
     let ts = |rev: &str| {
         git(&["log", "-1", "--format=%ct", rev])?
@@ -200,6 +216,72 @@ mod tests {
             Staleness::Behind { commits, .. } => assert_eq!(commits, 12),
             other => panic!("expected Behind, got {other:?}"),
         }
+    }
+
+    /// The gap must count only what the indexer will actually consume.
+    ///
+    /// git.rs walks with `--no-merges`; staleness used to count WITHOUT it, so
+    /// the two disagreed and merges became a gap indexing could never close.
+    /// Observed on Dorky-Robot/kita: "10 commits BEHIND" against 7 indexable
+    /// ones — a warning you cannot clear by obeying it.
+    ///
+    /// Built so the miscount CHANGES THE VERDICT: 9 real commits + 3 merges is
+    /// 12 by the old count (over the threshold of 10 → warns) and 9 by the new
+    /// one (under → quiet). A test where both counts agree would prove nothing.
+    #[test]
+    fn check_ignores_merge_commits_the_indexer_will_never_consume() {
+        let repo = repo_with_commits(1);
+        let base = git(repo.path(), &["rev-parse", "HEAD"]);
+
+        for b in 0..3 {
+            git(repo.path(), &["checkout", "-b", &format!("side{b}")]);
+            for c in 0..3 {
+                git(
+                    repo.path(),
+                    &["commit", "--allow-empty", "-m", &format!("s{b}c{c}")],
+                );
+            }
+            git(repo.path(), &["checkout", "-"]);
+            git(
+                repo.path(),
+                &[
+                    "merge",
+                    "--no-ff",
+                    &format!("side{b}"),
+                    "-m",
+                    &format!("merge: side{b}"),
+                ],
+            );
+        }
+
+        assert_eq!(
+            git(
+                repo.path(),
+                &["rev-list", "--count", &format!("{base}..HEAD")]
+            ),
+            "12",
+            "fixture should have 12 total commits"
+        );
+        assert_eq!(
+            git(
+                repo.path(),
+                &[
+                    "rev-list",
+                    "--count",
+                    "--no-merges",
+                    &format!("{base}..HEAD")
+                ]
+            ),
+            "9",
+            "fixture should have 9 indexable commits"
+        );
+
+        assert_eq!(
+            check(repo.path(), &base),
+            Staleness::Fresh,
+            "9 indexable commits is under the threshold — counting the 3 merges \
+             pushes it to 12 and warns about work indexing can never consume"
+        );
     }
 
     #[test]
