@@ -411,6 +411,11 @@ pub(crate) fn run_index(
     )?;
     let commits = git::filter_noise(commits);
 
+    // The newest commit git offered us, captured BEFORE dedup filtering. If
+    // every commit turns out to be already-indexed we still need this to move
+    // the watermark — see the `commits.is_empty()` branch below.
+    let newest_seen = commits.last().map(|c| c.sha.clone());
+
     // Deduplicate: skip commits that already have insights (makes `diwa index` idempotent).
     let existing_shas = db.indexed_shas()?;
     let commits: Vec<_> = if existing_shas.is_empty() {
@@ -431,6 +436,20 @@ pub(crate) fn run_index(
     };
 
     if commits.is_empty() {
+        // Everything git offered is already indexed — but the WATERMARK was
+        // never advanced past whatever it pointed at, so `last_indexed_sha`
+        // kept naming an old commit while the content was fully current.
+        //
+        // That is not cosmetic. staleness.rs measures the gap from this value,
+        // so the banner said "BEHIND HEAD" and told the user to run an index
+        // that would immediately answer "No new commits to index" — a warning
+        // that cannot be cleared by obeying it. It also made every incremental
+        // run re-walk and re-skip the same commits, growing forever.
+        //
+        // Having verified they are all present, say so.
+        if let Some(sha) = newest_seen {
+            db.set_last_indexed_sha(&sha)?;
+        }
         println!("No new commits to index.");
         return Ok(());
     }
