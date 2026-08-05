@@ -270,6 +270,10 @@ pub fn bootout_if_loaded() {
 /// Best-effort: a permission failure becomes a soft hint, not a hard
 /// error — TCC prompts are annoying but non-blocking, so a noisy failure
 /// here would be worse than the prompts themselves. No-op on non-macOS.
+/// Stable ad-hoc signing identity. MUST NOT track the binary's content or
+/// name — that is the whole point (see `codesign_adhoc_best_effort`).
+const SIGNING_IDENTIFIER: &str = "com.dorky-robot.diwa";
+
 pub fn codesign_adhoc_best_effort(path: &Path, use_sudo: bool) {
     if !cfg!(target_os = "macos") {
         return;
@@ -288,6 +292,14 @@ pub fn codesign_adhoc_best_effort(path: &Path, use_sudo: bool) {
             "--sign",
             "-",
             "--force",
+            // Without this, codesign DERIVES the identifier from the file name
+            // and content hash, so every release is a different program as far
+            // as TCC is concerned and the Photos/Contacts prompts start over.
+            // Measured on two real release binaries:
+            //   no -i  →  diwa-555549443024dbeb…  and  diwa-5555494470e57363…
+            //   with   →  com.dorky-robot.diwa    both times
+            "--identifier",
+            SIGNING_IDENTIFIER,
             "--preserve-metadata=entitlements,flags",
         ])
         .arg(path)
@@ -299,7 +311,7 @@ pub fn codesign_adhoc_best_effort(path: &Path, use_sudo: bool) {
 
     eprintln!(
         "Note: could not ad-hoc sign {0}. Run\n  \
-         sudo codesign --sign - --force --preserve-metadata=entitlements,flags {0}\n\
+         sudo codesign --sign - --force --identifier com.dorky-robot.diwa \\\n           --preserve-metadata=entitlements,flags {0}\n\
          once to silence macOS TCC prompts (Photos / Contacts) on the unsigned binary.",
         path.display()
     );
