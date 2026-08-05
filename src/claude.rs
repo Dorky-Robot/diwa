@@ -2,11 +2,35 @@
 
 use anyhow::{Context, Result};
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::Command;
+
+/// Directory `claude` runs in. The CLI treats its cwd as a project root and
+/// walks it gathering context — run it from wherever the caller happens to
+/// be and that walk leaks outside diwa's world. The daemon made this
+/// concrete: launchd starts agents with cwd `/`, so the walk descended into
+/// ~/Desktop and macOS raised a "diwa would like to access files in your
+/// Desktop folder" TCC prompt (the LaunchAgent is the responsible process,
+/// so the child's file access is billed to diwa). Our prompts embed all the
+/// commit data they need, so claude gets a dedicated empty dir instead.
+fn claude_cwd() -> Option<PathBuf> {
+    let base = if let Some(dir) = std::env::var_os("DIWA_DIR") {
+        PathBuf::from(dir)
+    } else {
+        PathBuf::from(std::env::var_os("HOME")?).join(".diwa")
+    };
+    let cwd = base.join("agent-cwd");
+    std::fs::create_dir_all(&cwd).ok()?;
+    Some(cwd)
+}
 
 /// Send a prompt to `claude -p` and return the response text.
 pub fn prompt(text: &str) -> Result<String> {
-    let mut child = Command::new("claude")
+    let mut cmd = Command::new("claude");
+    if let Some(cwd) = claude_cwd() {
+        cmd.current_dir(cwd);
+    }
+    let mut child = cmd
         .args(["-p", "--output-format", "text"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

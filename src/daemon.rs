@@ -180,6 +180,8 @@ pub fn install() -> Result<()> {
         <key>PATH</key>
         <string>{path}</string>{ort_dylib}
     </dict>
+    <key>WorkingDirectory</key>
+    <string>{workdir}</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -195,6 +197,11 @@ pub fn install() -> Result<()> {
 "#,
         label = PLIST_LABEL,
         exe = xml_escape(&exe.to_string_lossy()),
+        // launchd's default cwd is `/`. Children we spawn (git, gh, claude)
+        // inherit it, and anything that walks or resolves paths from cwd
+        // then starts at the filesystem root — claude's project-context walk
+        // reached ~/Desktop that way and drew a TCC prompt blamed on diwa.
+        workdir = xml_escape(&diwa.to_string_lossy()),
         log = xml_escape(&log_path.to_string_lossy()),
         path = xml_escape(&path_env),
         ort_dylib = ort_dylib_entry,
