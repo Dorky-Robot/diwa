@@ -1281,14 +1281,38 @@ fn cmd_upgrade() -> Result<()> {
 
     // tempfile::TempDir cleans up on drop — nothing to do here.
 
-    // Ad-hoc sign and bring the daemon back up against the new binary.
-    // The sign step gives macOS a stable cdhash so TCC stops treating
-    // each upgrade as an "unknown binary" event; the bootstrap is the
-    // counterpart to bootout_if_loaded() above.
+    // Hand the post-install work to the NEW binary by re-executing it.
+    //
+    // This used to call daemon::codesign_adhoc_best_effort + daemon::install
+    // in-process, which meant the OUTGOING binary performed the install using
+    // its OWN rules. Every fix to the install path therefore skipped its own
+    // upgrade and only took effect one release later. It happened three times
+    // running: 0.5.3 (hook directory), 0.5.6 (stable signing identifier), and
+    // 0.5.8 (silencing launchctl stderr) all shipped and then failed to apply
+    // to the very upgrade that delivered them.
+    //
+    // `daemon install` already does exactly this work — sign, write the plist,
+    // bootout, bootstrap — so re-exec is the whole fix. A release is now
+    // self-applying, and verifying an install-path change no longer requires
+    // shipping a SECOND release to observe the first one working.
     if cfg!(target_os = "macos") {
-        daemon::codesign_adhoc_best_effort(&dest, needs_sudo);
-        if let Err(e) = daemon::install() {
-            eprintln!("Warning: could not reload LaunchAgent ({e:#}). Run `diwa daemon install` to retry.");
+        let handed_off = std::process::Command::new(&dest)
+            .args(["daemon", "install"])
+            .status()
+            .map(|st| st.success())
+            .unwrap_or(false);
+
+        if !handed_off {
+            // The new binary could not run (corrupt download, quarantine,
+            // missing dylib). Fall back to our own implementation so the
+            // daemon still comes back up — degraded, but never left down.
+            eprintln!(
+                "Note: new binary could not self-install; falling back to the previous installer."
+            );
+            daemon::codesign_adhoc_best_effort(&dest, needs_sudo);
+            if let Err(e) = daemon::install() {
+                eprintln!("Warning: could not reload LaunchAgent ({e:#}). Run `diwa daemon install` to retry.");
+            }
         }
     }
 
