@@ -115,6 +115,18 @@ The `<repo>` argument accepts a short name (`yelo`), full name (`Dorky-Robot/yel
 
 `diwa index` is safe to re-run — it queries existing commit SHAs and skips anything already processed. If the daemon was down, the next trigger fills the gap. No duplicates.
 
+## Running the hub
+
+One instance (the mini) holds every index; other machines query it.
+
+- **Data dir:** `DIWA_DIR` (hub: `~/.diwa-hub`). **Label:** `com.dorky-robot.diwa-hub` (`DIWA_LABEL` overrides). The plist is `Nice 10`, `ProcessType Background`, and carries the `DIWA_*` settings it was installed with. Extraction is strictly sequential: one `claude` call at a time.
+- **Install/restart:** `diwa daemon install`. A first install bootstraps; a repeat with an unchanged plist is `launchctl kickstart -k`; a changed plist reloads in a detached shell. It never runs a foreground bootout then bootstrap.
+- **Model:** `DIWA_MODEL=sonnet`, `DIWA_EFFORT=low`. The old dr2 daemon pinned `claude -p` to Haiku through `~/.diwa/agent-cwd/.claude/settings.json`; the hub does not read that file (`--setting-sources project` plus an explicit `--model`), so it runs Sonnet low.
+- **Private repos:** the mirror is cloned with git, so the host needs a working git credential. On the mini that is the ssh key (`DIWA_GITHUB_BASE=git@github.com:`); `gh` is not required.
+- **If `claude` is logged out**, indexing stops without advancing the watermark and logs the error; the next poll retries. Nothing is lost.
+- **Other machines:** `scripts/diwa-shim.sh` forwards `search`, `ls` and `stats` to the hub over ssh with the same output shape. In `ls`, the path column is the hub's bare mirror (`~/.diwa-hub/repos/<org>--<name>.git`), not a checkout.
+- **Replication:** `scripts/hub-replicate.sh` takes `sqlite3 .backup` copies hourly to the external drive and refuses when it is unmounted.
+
 ## Requirements
 
 - **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** (required) — Claude reads your commits and diffs and does the hard work of understanding *why* code changed, not just *what* changed. This is a frontier-model task. You need Claude Code installed and authenticated.
