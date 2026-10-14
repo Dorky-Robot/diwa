@@ -52,8 +52,8 @@ pub fn warning(slug: &str, s: &Staleness) -> Option<String> {
             "⚠️  diwa index for {slug} is {commits} commits / {days} days BEHIND HEAD.\n\
              ⚠️  Answers below may predate recent work — verify against the code before\n\
              ⚠️  relying on them. Catch up with:  diwa index <repo-path>\n\
-             ⚠️  If this keeps happening the post-commit hook is not firing (husky v9\n\
-             ⚠️  repos: the hook must live in .husky/, never the regenerated .husky/_)."
+             ⚠️  If this keeps happening the hub daemon is not polling: check\n\
+             ⚠️  `diwa daemon status` and ~/.diwa/daemon.log."
         )),
         Staleness::Detached => Some(format!(
             "⚠️  diwa index for {slug} points at a commit that is NOT in this repo's\n\

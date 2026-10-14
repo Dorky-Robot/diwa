@@ -7,9 +7,7 @@ mod embed;
 mod extract;
 mod git;
 mod github;
-mod install;
 mod manifest;
-mod migrate;
 mod mirror;
 mod reflect;
 mod repo;
@@ -113,21 +111,7 @@ pub enum Commands {
         repo: String,
     },
 
-    /// Install diwa into a repo (adds post-commit hook)
-    Init {
-        /// Target directory (default: current dir)
-        #[arg(default_value = ".")]
-        dir: PathBuf,
-    },
-
-    /// Remove diwa from a repo
-    Uninit {
-        /// Target directory (default: current dir)
-        #[arg(default_value = ".")]
-        dir: PathBuf,
-    },
-
-    /// Refresh hooks and reindex all registered repos
+    /// Fetch and reindex all registered repos now (the daemon does this on a timer)
     Update,
 
     /// List all indexed repos
@@ -142,9 +126,6 @@ pub enum Commands {
 
     /// Upgrade diwa to the latest release
     Upgrade,
-
-    /// Migrate existing repos to the daemon-based indexing model
-    Migrate,
 
     /// Manage the background indexing daemon
     Daemon {
@@ -202,31 +183,6 @@ fn main() {
 type BatchPayload = anyhow::Result<(Vec<db::Insight>, Vec<Vec<f32>>, String)>;
 
 fn run(cli: Cli) -> Result<()> {
-    // Self-heal: if diwa was just upgraded past a version that changed the
-    // hook/daemon shape, re-run migrate transparently.
-    //
-    // This is an ALLOW-list on purpose. It used to be a skip-list, which meant
-    // every command not explicitly excluded could rewrite git hooks in EVERY
-    // registered repo — including `search`, `stats`, `ls` and `browse`, which
-    // a user reasonably believes are reads. On 2026-08-05 a bare
-    // `diwa stats kita` fired the 0.5.1→0.5.2 migration and DELETED the repo's
-    // .husky/post-commit, i.e. a diagnostic command destroyed the thing being
-    // diagnosed. Reads must not mutate. Only commands whose whole job is
-    // installation may migrate.
-    let may_auto_migrate = matches!(
-        cli.command,
-        Commands::Init { .. }
-            | Commands::Index { .. }
-            | Commands::Reindex { .. }
-            | Commands::Update
-            | Commands::Daemon {
-                action: DaemonAction::Install
-            }
-    );
-    if may_auto_migrate {
-        migrate::auto_migrate_if_needed(&diwa_dir());
-    }
-
     match cli.command {
         Commands::Index {
             dir,
@@ -251,14 +207,11 @@ fn run(cli: Cli) -> Result<()> {
             deep,
         } => run_search(&repo, &query, n, json, deep),
         Commands::Reflect { repo } => run_reflect(&repo),
-        Commands::Init { dir } => run_init(&dir),
-        Commands::Uninit { dir } => run_uninit(&dir),
         Commands::Update => run_update(),
         Commands::Browse { repo } => run_browse(&repo),
         Commands::Ls => run_ls(),
         Commands::Stats { repo } => run_stats(&repo),
         Commands::Upgrade => cmd_upgrade(),
-        Commands::Migrate => migrate::run(&diwa_dir()),
         Commands::Daemon { action } => match action {
             DaemonAction::Install => daemon::install(),
             DaemonAction::Uninstall => daemon::uninstall(),
@@ -841,54 +794,16 @@ fn run_reflect(repo_arg: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_init(dir: &Path) -> Result<()> {
-    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-
-    // Install the hook.
-    install::install_hook(&dir)?;
-
-    // Register in manifest so `diwa update` can find it.
-    let resolved = repo::resolve_repo(&dir)?;
-    let slug = format!("{}--{}", resolved.owner, resolved.name);
-    manifest::register_repo(&diwa_dir(), &slug, &dir)?;
-
-    // Run initial index.
-    println!("\nRunning initial index...");
-    run_index(&dir, 5000, 8, false)?;
-
-    println!("\ndiwa is installed. New commits will be indexed automatically.");
-    Ok(())
-}
-
-fn run_uninit(dir: &Path) -> Result<()> {
-    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-    install::uninstall_hook(&dir)?;
-
-    // Unregister from manifest.
-    if let Ok(resolved) = repo::resolve_repo(&dir) {
-        let slug = format!("{}--{}", resolved.owner, resolved.name);
-        let _ = manifest::unregister_repo(&diwa_dir(), &slug);
-    }
-
-    Ok(())
-}
-
 fn run_update() -> Result<()> {
     let diwa = diwa_dir();
 
     println!("diwa v{}", env!("CARGO_PKG_VERSION"));
 
-    // Before touching hooks, make sure the hooks will actually resolve to
-    // *this* binary. A stale `diwa` earlier on PATH (e.g. a leftover
-    // `cargo install` shim in ~/.local/bin) silently breaks enqueue-based
-    // indexing because pre-0.4.0 doesn't know the `enqueue` subcommand.
-    report_shadow_repairs(install::repair_shadowed_binaries());
-
-    // Refresh hooks and index for all registered repos.
+    // Fetch and index all registered repos.
     let repos = manifest::read_manifest(&diwa);
 
     if repos.is_empty() {
-        println!("\nNo repos registered. Run `diwa init` in a repo first.");
+        println!("\nNo repos registered. Run `diwa add org/name` first.");
         return Ok(());
     }
 
@@ -909,11 +824,9 @@ fn run_update() -> Result<()> {
             continue;
         }
 
-        // Refresh the hook (picks up any changes to the hook script).
-        match install::install_hook(path) {
-            Ok(_) => {}
-            Err(e) => {
-                println!("hook update failed ({e}), skipping.");
+        if path.extension().is_some_and(|e| e == "git") {
+            if let Err(e) = mirror::fetch(path) {
+                println!("fetch failed ({e}), skipping.");
                 failed.push(display);
                 continue;
             }
@@ -941,38 +854,6 @@ fn run_update() -> Result<()> {
     }
 }
 
-fn report_shadow_repairs(outcomes: Vec<install::ShadowRepair>) {
-    let mut printed_header = false;
-    let mut ensure_header = || {
-        if !printed_header {
-            println!("\nChecking PATH for stale diwa binaries...");
-            printed_header = true;
-        }
-    };
-
-    for outcome in outcomes {
-        match outcome {
-            install::ShadowRepair::Clean => {}
-            install::ShadowRepair::Repaired { shadow, backup } => {
-                ensure_header();
-                println!(
-                    "  Moved stale {} -> {} (was shadowing the installed diwa; hooks will now resolve correctly).",
-                    shadow.display(),
-                    backup.display(),
-                );
-            }
-            install::ShadowRepair::Warned { shadow, reason } => {
-                ensure_header();
-                eprintln!(
-                    "  Warning: {} precedes the current binary on PATH ({}). Git hooks may call the wrong diwa.",
-                    shadow.display(),
-                    reason,
-                );
-            }
-        }
-    }
-}
-
 fn run_browse(repo_arg: &str) -> Result<()> {
     let diwa = diwa_dir();
     let slug = resolve_slug(repo_arg)?;
@@ -988,7 +869,7 @@ fn run_ls() -> Result<()> {
     let repos = manifest::read_manifest(&diwa);
 
     if repos.is_empty() {
-        println!("No indexed repos. Run `diwa init` in a git repo to get started.");
+        println!("No indexed repos. Run `diwa add org/name` to get started.");
         return Ok(());
     }
 

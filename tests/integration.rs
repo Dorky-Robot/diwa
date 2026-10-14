@@ -84,18 +84,6 @@ fn test_index_help() {
 }
 
 #[test]
-fn test_init_not_a_git_repo() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let output = Command::new(diwa_bin())
-        .args(["init", tmp.path().to_str().unwrap()])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not a git repo") || stderr.contains("No GitHub remote"));
-}
-
-#[test]
 fn test_index_not_a_git_repo() {
     let tmp = tempfile::TempDir::new().unwrap();
     let output = Command::new(diwa_bin())

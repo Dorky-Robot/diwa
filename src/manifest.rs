@@ -25,13 +25,6 @@ pub fn register_repo(diwa_dir: &Path, slug: &str, local_path: &Path) -> Result<(
     write_manifest(diwa_dir, &manifest)
 }
 
-/// Remove a repo from the manifest.
-pub fn unregister_repo(diwa_dir: &Path, slug: &str) -> Result<()> {
-    let mut manifest = read_manifest(diwa_dir);
-    manifest.remove(slug);
-    write_manifest(diwa_dir, &manifest)
-}
-
 fn write_manifest(diwa_dir: &Path, manifest: &HashMap<String, PathBuf>) -> Result<()> {
     let path = diwa_dir.join(MANIFEST_FILE);
     let json = serde_json::to_string_pretty(manifest)?;
@@ -58,16 +51,5 @@ mod tests {
         let manifest = read_manifest(tmp.path());
         assert_eq!(manifest.len(), 1);
         assert_eq!(manifest["owner--repo"], PathBuf::from("/path/to/repo"));
-    }
-
-    #[test]
-    fn test_unregister() {
-        let tmp = TempDir::new().unwrap();
-        register_repo(tmp.path(), "a--b", Path::new("/a")).unwrap();
-        register_repo(tmp.path(), "c--d", Path::new("/c")).unwrap();
-        unregister_repo(tmp.path(), "a--b").unwrap();
-        let manifest = read_manifest(tmp.path());
-        assert_eq!(manifest.len(), 1);
-        assert!(!manifest.contains_key("a--b"));
     }
 }
