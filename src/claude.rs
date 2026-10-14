@@ -168,12 +168,21 @@ pub fn prompt(text: &str) -> Result<String> {
     Ok(env.text)
 }
 
+/// (calls, input tokens, output tokens) summed over a usage log. Lines that
+/// do not parse are skipped; the `cost_usd` field older lines carry is ignored.
+pub fn usage_totals(log: &str) -> (u64, u64, u64) {
+    log.lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .fold((0, 0, 0), |(c, i, o), v| {
+            (c + 1, i + v["in"].as_u64().unwrap_or(0), o + v["out"].as_u64().unwrap_or(0))
+        })
+}
+
 /// What `claude -p --output-format json` returns, reduced to what we use.
 #[derive(Debug, PartialEq)]
 pub(crate) struct Envelope {
     pub text: String,
     pub is_error: bool,
-    pub cost_usd: f64,
     pub input_tokens: u64,
     pub output_tokens: u64,
 }
@@ -183,7 +192,6 @@ pub(crate) fn parse_envelope(raw: &str) -> Envelope {
     let plain = || Envelope {
         text: raw.to_string(),
         is_error: false,
-        cost_usd: 0.0,
         input_tokens: 0,
         output_tokens: 0,
     };
@@ -197,14 +205,15 @@ pub(crate) fn parse_envelope(raw: &str) -> Envelope {
     Envelope {
         text: text.to_string(),
         is_error: v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false),
-        cost_usd: v.get("total_cost_usd").and_then(|c| c.as_f64()).unwrap_or(0.0),
         input_tokens: u("input_tokens") + u("cache_creation_input_tokens") + u("cache_read_input_tokens"),
         output_tokens: u("output_tokens"),
     }
 }
 
-/// One line per call in `<diwa dir>/cost.jsonl`, so spend can be summed
-/// (`jq -s 'map(.cost_usd)|add'`). Best effort: never fails a call.
+/// One line per call in `<diwa dir>/cost.jsonl` (name kept so older lines
+/// stay in the same file): ts, model, effort, in, out tokens. Dollars are
+/// not recorded — usage is on a flat subscription. Sum with `usage_totals`.
+/// Best effort: never fails a call.
 fn record_cost(model: &str, effort: &str, env: &Envelope) {
     let base = match std::env::var_os("DIWA_DIR") {
         Some(d) => PathBuf::from(d),
@@ -216,7 +225,7 @@ fn record_cost(model: &str, effort: &str, env: &Envelope) {
     let line = serde_json::json!({
         "ts": chrono::Utc::now().to_rfc3339(),
         "model": model, "effort": effort,
-        "cost_usd": env.cost_usd, "in": env.input_tokens, "out": env.output_tokens,
+        "in": env.input_tokens, "out": env.output_tokens,
     });
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(base.join("cost.jsonl")) {
         let _ = writeln!(f, "{line}");
@@ -355,11 +364,16 @@ mod envelope_tests {
     use super::*;
 
     #[test]
-    fn parses_result_cost_and_tokens() {
+    fn totals_tolerate_old_lines_with_cost() {
+        let log = "{\"cost_usd\":0.04,\"in\":100,\"out\":10,\"model\":\"sonnet\"}\nnot json\n{\"in\":5,\"out\":1}\n";
+        assert_eq!(usage_totals(log), (2, 105, 11));
+    }
+
+    #[test]
+    fn parses_result_and_tokens() {
         let e = parse_envelope(r#"{"result":"[]","is_error":false,"total_cost_usd":0.0125,"usage":{"input_tokens":2,"cache_creation_input_tokens":1983,"cache_read_input_tokens":5,"output_tokens":14}}"#);
         assert_eq!(e.text, "[]");
         assert!(!e.is_error);
-        assert!((e.cost_usd - 0.0125).abs() < 1e-9);
         assert_eq!((e.input_tokens, e.output_tokens), (1990, 14));
     }
 

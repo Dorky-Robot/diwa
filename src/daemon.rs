@@ -88,6 +88,10 @@ fn sweep(diwa_dir: &Path) {
             Err(e) => log_line(diwa_dir, &format!("error {slug}: {e:#}")),
         }
     }
+    if let Ok(log) = fs::read_to_string(diwa_dir.join("cost.jsonl")) {
+        let (calls, tin, tout) = crate::claude::usage_totals(&log);
+        log_line(diwa_dir, &format!("sweep over; usage to date: {calls} claude calls, {tin} tokens in, {tout} out"));
+    }
 }
 
 /// Commits one repo may index per sweep (`DIWA_SWEEP_MAX_COMMITS`, default
