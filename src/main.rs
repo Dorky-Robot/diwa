@@ -672,7 +672,15 @@ fn run_search(
     let has_embeddings = db.count_with_embeddings()? > 0;
     let query_owned = query.to_string();
     let embed_handle = if has_embeddings {
-        Some(std::thread::spawn(move || embed::embed(&query_owned).ok()))
+        Some(std::thread::spawn(move || match embed::embed(&query_owned) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                // Keyword search still answers; say the semantic half is off
+                // so a quietly worse result list is not mistaken for the best one.
+                eprintln!("diwa: semantic search unavailable, showing keyword matches only: {e:#}");
+                None
+            }
+        }))
     } else {
         None
     };

@@ -35,6 +35,38 @@ fn ensure_ort_dylib() {
     // Static linking — nothing to do.
 }
 
+/// dlopen the runtime ourselves first, so a broken install is an `Err` with
+/// dyld's real reason instead of a panic inside `ort`. `ort` only reports
+/// "failed to load from <path>", which blames the file that exists when the
+/// actual cause is one of its dependencies (on mac2019 Homebrew moved abseil
+/// and protobuf past the versions the onnxruntime bottle was built against).
+#[cfg(feature = "load-dynamic")]
+fn preflight_ort() -> Result<()> {
+    let path = std::env::var("ORT_DYLIB_PATH").unwrap_or_else(|_| "libonnxruntime.dylib".into());
+    let c = std::ffi::CString::new(path.clone())?;
+    // SAFETY: plain dlopen/dlerror; the handle is deliberately kept open so
+    // ort's own dlopen of the same path is a refcount bump.
+    unsafe {
+        if !libc::dlopen(c.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL).is_null() {
+            return Ok(());
+        }
+        let err = libc::dlerror();
+        let why = if err.is_null() {
+            "unknown dlopen error".to_string()
+        } else {
+            std::ffi::CStr::from_ptr(err).to_string_lossy().into_owned()
+        };
+        anyhow::bail!(
+            "ONNX Runtime ({path}) cannot load: {why}. If a dependency is missing, `brew upgrade onnxruntime` (or `brew reinstall onnxruntime`) rebuilds it against current libraries."
+        )
+    }
+}
+
+#[cfg(not(feature = "load-dynamic"))]
+fn preflight_ort() -> Result<()> {
+    Ok(())
+}
+
 /// Lazily initialized embedding model (singleton behind a mutex).
 static MODEL: Mutex<Option<TextEmbedding>> = Mutex::new(None);
 
@@ -57,6 +89,7 @@ where
         .map_err(|e| anyhow::anyhow!("model lock poisoned: {e}"))?;
     if guard.is_none() {
         ensure_ort_dylib();
+        preflight_ort()?;
         let model = TextEmbedding::try_new(
             InitOptions::new(EmbeddingModel::BGESmallENV15)
                 .with_cache_dir(model_cache_dir())
