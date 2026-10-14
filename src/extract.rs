@@ -139,6 +139,7 @@ struct RawInsight {
     title: String,
     body: String,
     files: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "claude::lenient_tags")]
     tags: Option<String>,
 }
 

@@ -1,6 +1,7 @@
 //! Shared utilities for interacting with the Claude CLI.
 
 use anyhow::{Context, Result};
+use serde::Deserialize;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -158,6 +159,28 @@ pub fn prompt(text: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&stdout).trim().to_string())
 }
 
+/// Deserialize `tags` from either a string or an array of strings.
+///
+/// The prompt asks for "space-separated tags" but Sonnet returns an array in
+/// roughly one reply in five. With a strict `Option<String>` that discards the
+/// whole batch (and was a hard parse failure in 2 of 25 commits), so accept
+/// both and join arrays with spaces.
+pub fn lenient_tags<'de, D>(d: D) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Tags {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(Option::<Tags>::deserialize(d)?.map(|t| match t {
+        Tags::One(s) => s,
+        Tags::Many(v) => v.join(" "),
+    }))
+}
+
 /// Try to parse a JSON array from Claude's response.
 ///
 /// Handles: raw JSON, JSON in markdown fences, JSON embedded in prose.
@@ -219,6 +242,20 @@ mod tests {
     #[test]
     fn effort_off_omits_the_flag() {
         assert!(!build_args("claude-haiku-4-5-20251001", "off").contains(&"--effort".to_string()));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct T {
+        #[serde(default, deserialize_with = "lenient_tags")]
+        tags: Option<String>,
+    }
+
+    #[test]
+    fn tags_accept_string_array_or_absent() {
+        let v: Vec<T> = parse_json_array(r#"[{"tags":"a b"},{"tags":["c","d"]},{}]"#).unwrap();
+        assert_eq!(v[0].tags.as_deref(), Some("a b"));
+        assert_eq!(v[1].tags.as_deref(), Some("c d"));
+        assert_eq!(v[2].tags, None);
     }
 
     #[test]
