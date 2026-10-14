@@ -16,8 +16,38 @@ use std::time::Duration;
 
 use crate::{manifest, mirror};
 
-const PLIST_LABEL: &str = "com.dorky-robot.diwa";
-const PLIST_FILENAME: &str = "com.dorky-robot.diwa.plist";
+/// Default launchd label. Deliberately NOT the pre-hub `com.dorky-robot.diwa`,
+/// so a hub can be installed beside an old per-machine daemon. Override with
+/// `DIWA_LABEL`.
+const DEFAULT_LABEL: &str = "com.dorky-robot.diwa-hub";
+
+fn plist_label() -> String {
+    std::env::var("DIWA_LABEL")
+        .ok()
+        .filter(|l| !l.is_empty())
+        .unwrap_or_else(|| DEFAULT_LABEL.to_string())
+}
+
+/// What `install` does to launchd. Never a bootout followed by a separate
+/// bootstrap in the foreground: over ssh that pair can kill the path it runs on.
+#[derive(Debug, PartialEq, Eq)]
+enum ReloadPlan {
+    /// Not loaded: a single `bootstrap` (nothing to lose).
+    Bootstrap,
+    /// Loaded, plist unchanged: one atomic `kickstart -k`.
+    Kickstart,
+    /// Loaded, plist changed: launchd must re-read it, so run bootout and
+    /// bootstrap together in a detached shell that outlives this process.
+    DetachedReload,
+}
+
+fn reload_plan(loaded: bool, plist_changed: bool) -> ReloadPlan {
+    match (loaded, plist_changed) {
+        (false, _) => ReloadPlan::Bootstrap,
+        (true, false) => ReloadPlan::Kickstart,
+        (true, true) => ReloadPlan::DetachedReload,
+    }
+}
 
 /// Run the poll loop. This is what launchd invokes.
 pub fn run(diwa_dir: &Path) -> Result<()> {
@@ -86,7 +116,6 @@ pub fn install() -> Result<()> {
     let exe = std::env::current_exe().context("couldn't find current diwa binary")?;
     let diwa = diwa_dir();
     fs::create_dir_all(&diwa)?;
-    fs::create_dir_all(diwa.join("queue"))?;
 
     // Ad-hoc sign before launchd grabs the binary. macOS TCC tracks
     // unsigned LaunchAgents by path+cdhash and re-prompts speculatively
@@ -109,6 +138,18 @@ pub fn install() -> Result<()> {
         String::new()
     };
 
+    // Carry the settings that make this instance what it is into the plist.
+    let mut extra_env = String::new();
+    for key in ["DIWA_DIR", "DIWA_MODEL", "DIWA_EFFORT", "DIWA_POLL_SECS", "DIWA_CLAUDE_TIMEOUT_SECS"] {
+        if let Ok(v) = std::env::var(key) {
+            extra_env.push_str(&format!(
+                "\n        <key>{key}</key>\n        <string>{}</string>",
+                xml_escape(&v)
+            ));
+        }
+    }
+    let label = plist_label();
+
     let plist_body = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -125,7 +166,7 @@ pub fn install() -> Result<()> {
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>{path}</string>{ort_dylib}
+        <string>{path}</string>{ort_dylib}{extra_env}
     </dict>
     <key>WorkingDirectory</key>
     <string>{workdir}</string>
@@ -139,10 +180,13 @@ pub fn install() -> Result<()> {
     <string>{log}</string>
     <key>ProcessType</key>
     <string>Background</string>
+    <key>Nice</key>
+    <integer>10</integer>
 </dict>
 </plist>
 "#,
-        label = PLIST_LABEL,
+        label = label,
+        extra_env = extra_env,
         exe = xml_escape(&exe.to_string_lossy()),
         // launchd's default cwd is `/`. Children we spawn (git, gh, claude)
         // inherit it, and anything that walks or resolves paths from cwd
@@ -156,33 +200,55 @@ pub fn install() -> Result<()> {
 
     let plist_file = plist_path()?;
     fs::create_dir_all(plist_file.parent().unwrap())?;
-    fs::write(&plist_file, plist_body)?;
+    let changed = fs::read_to_string(&plist_file).map(|old| old != plist_body).unwrap_or(true);
+    fs::write(&plist_file, &plist_body)?;
     println!("Wrote {}", plist_file.display());
 
-    // Reload: bootout (if loaded) then bootstrap.
     let uid = current_uid()?;
     let domain = format!("gui/{uid}");
+    let target = format!("{domain}/{label}");
+    let loaded = Command::new("launchctl")
+        .args(["print", &target])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let plist_str = plist_file.to_string_lossy().into_owned();
 
-    // Ignore bootout failures — the agent may simply not be loaded. Use
-    // `output()` rather than `status()` so launchctl's stderr is CAPTURED,
-    // not spilled onto the user's terminal: it prints "Boot-out failed: 5:
-    // Input/output error" in cases we have already decided are fine, and a
-    // scary red line next to a successful upgrade sends people hunting a bug
-    // that isn't there. (It did exactly that on 2026-08-05, for about an hour.)
-    let _ = Command::new("launchctl")
-        .args(["bootout", &domain, &plist_file.to_string_lossy()])
-        .output();
-
-    let status = Command::new("launchctl")
-        .args(["bootstrap", &domain, &plist_file.to_string_lossy()])
-        .status()
-        .context("launchctl bootstrap failed")?;
-
-    if !status.success() {
-        bail!("launchctl bootstrap returned non-zero status");
+    match reload_plan(loaded, changed) {
+        ReloadPlan::Bootstrap => {
+            let out = Command::new("launchctl")
+                .args(["bootstrap", &domain, &plist_str])
+                .output()
+                .context("launchctl bootstrap failed")?;
+            if !out.status.success() {
+                bail!("launchctl bootstrap failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+            }
+            println!("Loaded LaunchAgent {label}");
+        }
+        ReloadPlan::Kickstart => {
+            let out = Command::new("launchctl")
+                .args(["kickstart", "-k", &target])
+                .output()
+                .context("launchctl kickstart failed")?;
+            if !out.status.success() {
+                bail!("launchctl kickstart failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+            }
+            println!("Restarted LaunchAgent {label} (kickstart -k)");
+        }
+        ReloadPlan::DetachedReload => {
+            let script = format!(
+                "launchctl bootout {target}; sleep 2; launchctl bootstrap {domain} '{plist_str}'"
+            );
+            Command::new("nohup")
+                .args(["sh", "-c", &script])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .context("couldn't start detached reload")?;
+            println!("Plist changed: reloading {label} in a detached shell (give it a few seconds)");
+        }
     }
-
-    println!("Loaded LaunchAgent {PLIST_LABEL}");
     println!("Logs: {}", log_path.display());
     Ok(())
 }
@@ -287,7 +353,7 @@ pub fn status() -> Result<()> {
     }
 
     let uid = current_uid()?;
-    let target = format!("gui/{uid}/{PLIST_LABEL}");
+    let target = format!("gui/{uid}/{}", plist_label());
     let output = Command::new("launchctl")
         .args(["print", &target])
         .output()
@@ -318,7 +384,7 @@ pub fn status() -> Result<()> {
 
 fn plist_path() -> Result<PathBuf> {
     let home = home_dir().context("$HOME not set")?;
-    Ok(home.join("Library/LaunchAgents").join(PLIST_FILENAME))
+    Ok(home.join("Library/LaunchAgents").join(format!("{}.plist", plist_label())))
 }
 
 fn current_uid() -> Result<u32> {
@@ -383,4 +449,30 @@ fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reload_never_does_a_foreground_two_step() {
+        assert_eq!(reload_plan(false, true), ReloadPlan::Bootstrap);
+        assert_eq!(reload_plan(false, false), ReloadPlan::Bootstrap);
+        assert_eq!(reload_plan(true, false), ReloadPlan::Kickstart);
+        assert_eq!(reload_plan(true, true), ReloadPlan::DetachedReload);
+    }
+
+    #[test]
+    fn default_label_does_not_collide_with_the_old_daemon() {
+        assert_ne!(DEFAULT_LABEL, "com.dorky-robot.diwa");
+    }
+
+    #[test]
+    fn install_source_has_no_foreground_bootout_then_bootstrap() {
+        // The only bootout in install() lives inside the detached shell string.
+        let src = include_str!("daemon.rs");
+        let install = &src[src.find("pub fn install()").unwrap()..src.find("pub fn uninstall()").unwrap()];
+        assert!(!install.contains(r#"args(["bootout""#));
+    }
 }
