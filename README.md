@@ -8,124 +8,29 @@ It replaces ADRs, changelogs, and tribal knowledge with something that actually 
 
 ## Quick start
 
-```bash
-brew tap Dorky-Robot/tap && brew install diwa
-
-cd your-repo
-diwa init
-```
-
-That's it. `diwa init` indexes your full commit history, installs `post-commit` and `post-merge` git hooks, and starts a background daemon — the knowledge base stays current without you thinking about it. Hooks are sub-10ms; indexing happens off the critical path. Now search:
+diwa runs as one hub: it keeps bare mirror clones under `~/.diwa/repos/`, polls them, and indexes new commits with Claude.
 
 ```bash
-diwa search your-repo "why did we switch to pull-based rendering"
+diwa add Dorky-Robot/yelo        # mirror, register, index full history
+diwa daemon install              # keep every registered repo fresh (poll loop)
+diwa search yelo "why did we switch to pull-based rendering"
 ```
 
-## Try it on a real repo
-
-[Dorky-Robot/yelo](https://github.com/Dorky-Robot/yelo) is a 38-commit S3/Glacier CLI that was rewritten from Go to Rust mid-development. It's a good test case because the git history tells a story.
-
-```bash
-git clone https://github.com/Dorky-Robot/yelo.git
-cd yelo
-diwa init
-```
-
-32 commits become 17 insights + reflections. Now ask questions:
-
-```
-$ diwa search yelo "why did they switch programming languages"
-
-1. [migration] Full language migration from Go to Rust for an S3/Glacier CLI
-   The entire Go codebase (32 files, ~4000 lines) was deleted in a single
-   commit, indicating the Rust rewrite had already reached feature parity.
-   commit: 7142a7b | 2026-03-13 | git
-   tags: migration go rust rewrite language-switch s3 glacier
-
-2. [migration] Full rewrite from Go to Rust after reaching TUI complexity ceiling
-   After three commits refining the Go/bubbletea TUI, the entire application
-   was rewritten in Rust with ratatui. The Go implementation hit friction —
-   likely around async daemon work and the immediate-mode rendering model.
-   commit: 4934193 | 2026-03-13 | git
-   tags: migration go rust rewrite ratatui tui daemon glacier architecture
-
-3. [reflection] The Go codebase was a disposable prototype that discovered the real requirements
-   The choreography-over-orchestration principle survived the rewrite intact,
-   but the TUI, type system, and daemon architecture were all rebuilt from
-   scratch in Rust — the Go version existed to learn what to build.
-   commit: 4934193 | reflection
-   tags: go rust prototype learning architecture
-```
-
-The query contains none of the words in the results — no "Go", no "Rust", no "migration". Semantic vector search found them by meaning, not keywords.
-
-### Deep search
-
-For complex questions, `--deep` researches like a human would — starts with one search, reads the results, follows interesting threads, and spot-checks commits and code when needed:
-
-```
-$ diwa search yelo "why did they rewrite in rust" --deep
-
-The Go codebase served as a rapid prototype that discovered the real
-requirements. On a single day, the Go TUI went through six iterations —
-built, rewritten with a mode machine, bug-fixed, refactored to bubbles.
-The very next day, the full Rust rewrite landed (4934193). The bubbles
-refactor likely revealed that Go's bubbletea couldn't cleanly support the
-daemon and library features the project needed. The Rust rewrite wasn't a
-line-by-line port — it systematically replaced stringly-typed patterns with
-enums, made the TUI the primary interface, and added features the Go version
-never had.
-
-Sources: "The Go codebase was a disposable prototype," "Full rewrite from
-Go to Rust," "Full language migration completed"
-```
-
-Deep search runs an agentic loop: each step picks one action (search, `git show`, read a file) based on what it's learned so far. See [docs/deep-search.md](docs/deep-search.md) for how the loop works.
-
-### Browse
-
-Scroll through all insights like a dev diary:
-
-```bash
-diwa browse yelo
-```
-
-## Use diwa as a Claude Code skill
-
-This is the biggest unlock. diwa ships with a [Claude Code skill](skills/diwa/SKILL.md) that teaches Claude to reach for `diwa search` *first* whenever the context is a feature, branch, or area of a repo — before it falls back to `git log --grep` or `grep`. The skill turns diwa from "a CLI you remember to run" into "the default way Claude gets caught up."
-
-Install it globally (all your projects) with one command:
-
-```bash
-mkdir -p ~/.claude/skills/diwa
-curl -fsSL https://raw.githubusercontent.com/Dorky-Robot/diwa/main/skills/diwa/SKILL.md \
-  -o ~/.claude/skills/diwa/SKILL.md
-```
-
-Or per-project, drop it in `.claude/skills/diwa/SKILL.md`.
-
-Now any of these phrases make Claude run `diwa search` as step one:
-
-- *"catch me up on the auth refactor"*
-- *"why did we switch to pull-based rendering?"*
-- *"what's the state of the payments branch?"*
-- *"keep working on the dispatch pipeline"*
-
-Claude uses diwa's returned commit SHAs as jumping-off points — `git show <sha>`, then follows clues in the diffs to drive follow-up searches. When independent threads emerge, it fans out parallel subagents to walk each rabbit hole. The skill file describes the full loop; the short version is: **diwa is stage one of context gathering, not the whole job.**
-
-Indexing every repo you work in ahead of time makes Claude *dramatically* faster at onboarding into unfamiliar areas — commit history is the most underused onboarding doc in software, and this makes it searchable by default.
+Model and effort come from the environment: `DIWA_MODEL` (default `sonnet`), `DIWA_EFFORT` (default `low`; `off` disables thinking), `DIWA_CLAUDE_TIMEOUT_SECS` (default 300), `DIWA_POLL_SECS` (default 600).
 
 ## How it works
 
 ```
-diwa init
-  1. Installs post-commit + post-merge hooks (fire-and-forget, sub-10ms)
-  2. Starts a launchd daemon that watches ~/.diwa/queue/ (macOS)
-  3. Registers the repo in ~/.diwa/repos.json
-  4. Backfills by indexing full history
+diwa add org/name
+  1. git clone --bare into ~/.diwa/repos/org--name.git (or fetch if present)
+  2. Registers the repo in ~/.diwa/repos.json
+  3. Backfills by indexing full history
+
+daemon (poll loop)
+  every DIWA_POLL_SECS: fetch each mirror, index new commits
 
 indexing (per repo)
-  1. Hook writes a flag file to ~/.diwa/queue/<repo-slug>
+  1. Daemon (or `diwa update`) fetches new commits
   2. Daemon picks it up, debounces bursts (e.g. git pull of 50 commits)
   3. Claude reads commits + diffs (pulls PR titles/comments if gh is set up)
   4. Claude extracts structured insights — decision, learning, pattern, etc.
@@ -173,55 +78,6 @@ Categories: `decision`, `pattern`, `learning`, `architecture`, `migration`, `bug
 
 ## Install
 
-### Homebrew (macOS / Linux)
-
-```bash
-brew tap Dorky-Robot/tap
-brew install diwa
-```
-
-If you already have the tap but diwa isn't found, refresh it:
-
-```bash
-cd /opt/homebrew/Library/Taps/dorky-robot/homebrew-tap && git pull
-brew install diwa
-```
-
-The Homebrew formula pulls in `onnxruntime` on Intel Mac, where `ort-sys` has no prebuilt binary. On Apple Silicon and Linux, ORT is statically linked.
-
-### Install script (Linux/macOS)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Dorky-Robot/diwa/main/install.sh | sh
-```
-
-Falls back to `cargo install` if no prebuilt binary is available for your platform.
-
-### Updating
-
-Once installed, diwa can update itself:
-
-```bash
-diwa upgrade    # replace the binary with the latest release
-diwa update     # refresh hooks + reindex all registered repos
-```
-
-Two separate commands by design — binary distribution is independent from refreshing your indexed repos, so `diwa update` doesn't hard-depend on Homebrew.
-
-diwa also checks for updates in the background and shows a hint when a newer version is available.
-
-### Docker
-
-```bash
-docker run --rm -v $(pwd):/repo -v ~/.diwa:/root/.diwa \
-  ghcr.io/dorky-robot/diwa index /repo
-
-docker run --rm -v $(pwd):/repo -v ~/.diwa:/root/.diwa \
-  ghcr.io/dorky-robot/diwa search /repo "your query"
-```
-
-The image ships with Claude CLI and `gh` preinstalled.
-
 ### From source
 
 ```bash
@@ -233,9 +89,7 @@ cargo install --path .
 ## Commands
 
 ```bash
-diwa init [dir]                         Install into a repo (hooks + daemon + full index)
-diwa uninit [dir]                       Remove from a repo
-
+diwa add <org/name>                     Mirror, register and index a GitHub repo
 diwa index [dir]                        Index new commits (incremental, idempotent)
 diwa reindex [dir]                      Rebuild from scratch
 diwa reflect [repo]                     Force-regenerate level 2 reflections
@@ -245,24 +99,21 @@ diwa search <repo> "query" --deep       Claude-synthesized answer with citations
 diwa search <repo> "query" --json       Machine-readable output for agents
 diwa search <repo> "query" -n 5         Limit results
 
-diwa browse <repo>                      Scroll through insights in a TUI
 diwa stats <repo>                       Show index info
 diwa ls                                 List all indexed repos
 
 diwa daemon status                      Check if the background daemon is running
-diwa daemon install                     Install the launchd agent (auto-runs on login)
+diwa daemon install                     Install the launchd agent
 diwa daemon uninstall                   Remove the launchd agent
 
-diwa update                             Refresh hooks + reindex all registered repos
-diwa migrate                            Upgrade pre-0.4.0 repos to the daemon model
-diwa upgrade                            Update the diwa binary itself
+diwa update                             Fetch and index all registered repos
 ```
 
 The `<repo>` argument accepts a short name (`yelo`), full name (`Dorky-Robot/yelo`), or a path (`.`, `/path/to/repo`).
 
 ### Indexing is idempotent
 
-`diwa index` is safe to re-run — it queries existing commit SHAs and skips anything already processed. If a hook run was interrupted or the daemon was down, the next trigger fills the gap. No duplicates.
+`diwa index` is safe to re-run — it queries existing commit SHAs and skips anything already processed. If the daemon was down, the next trigger fills the gap. No duplicates.
 
 ## Requirements
 
@@ -279,9 +130,8 @@ Everything lives under `~/.diwa/`:
 ```
 ~/.diwa/
   models/                        ONNX embedding model (downloaded once)
-  queue/                         flag files dropped by hooks (picked up by daemon)
+  repos/                         bare mirror clones (org--name.git)
   repos.json                     registry of installed repos
-  hooks.log                      diagnostic log for hook invocations
   daemon.log                     daemon log
   Dorky-Robot--yelo/
     index.db                     SQLite: insights + FTS5 index + embeddings
