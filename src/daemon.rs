@@ -1,111 +1,58 @@
 //! Background indexing daemon.
 //!
-//! Watches `~/.diwa/queue/` for flag files dropped by git hooks (via
-//! `diwa enqueue`). Each flag file is named after a repo slug. When one
-//! appears, we delete it first (so commits landing during indexing
-//! create a fresh flag we'll catch next pass) then run the indexer.
+//! The hub's only loop: every `DIWA_POLL_SECS` (default 600) fetch each
+//! registered bare mirror and index whatever is new. There are no git hooks
+//! and no queue; GitHub is the source of truth and we poll it.
 //!
 //! Managed by launchd on macOS. The `run` subcommand is launchd's
 //! entrypoint; `install`/`uninstall`/`status` manage the LaunchAgent.
 
 use anyhow::{bail, Context, Result};
-use notify::{RecursiveMode, Watcher};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc;
 use std::time::Duration;
 
-use crate::manifest;
+use crate::{manifest, mirror};
 
 const PLIST_LABEL: &str = "com.dorky-robot.diwa";
 const PLIST_FILENAME: &str = "com.dorky-robot.diwa.plist";
 
-/// Run the watcher loop. This is what launchd invokes.
+/// Run the poll loop. This is what launchd invokes.
 pub fn run(diwa_dir: &Path) -> Result<()> {
-    let queue = diwa_dir.join("queue");
-    fs::create_dir_all(&queue)?;
-
-    log_line(diwa_dir, "daemon starting");
-
-    // Initial sweep: pick up anything that accumulated while we were down.
-    process_all_pending(diwa_dir, &queue);
-
-    let (tx, rx) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(ev) = res {
-            let _ = tx.send(ev);
-        }
-    })?;
-    watcher
-        .watch(&queue, RecursiveMode::NonRecursive)
-        .with_context(|| format!("failed to watch {}", queue.display()))?;
-
-    log_line(diwa_dir, &format!("watching {}", queue.display()));
-
+    let poll = Duration::from_secs(
+        std::env::var("DIWA_POLL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(600),
+    );
+    log_line(diwa_dir, &format!("daemon starting (poll every {}s)", poll.as_secs()));
     loop {
-        match rx.recv_timeout(Duration::from_secs(300)) {
-            Ok(_) => {
-                // Drain any burst of events so we coalesce into one pass.
-                while rx.recv_timeout(Duration::from_millis(200)).is_ok() {}
-                process_all_pending(diwa_dir, &queue);
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Safety sweep in case fs events were missed (rare, but
-                // fs watching isn't 100% reliable across all filesystems).
-                process_all_pending(diwa_dir, &queue);
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                log_line(diwa_dir, "watcher channel closed, exiting");
-                break;
-            }
-        }
+        sweep(diwa_dir);
+        std::thread::sleep(poll);
     }
-
-    Ok(())
 }
 
-fn process_all_pending(diwa_dir: &Path, queue: &Path) {
-    let slugs = match fs::read_dir(queue) {
-        Ok(dir) => dir
-            .filter_map(|e| e.ok())
-            .filter_map(|e| e.file_name().into_string().ok())
-            .collect::<Vec<_>>(),
-        Err(_) => return,
-    };
-
-    if slugs.is_empty() {
-        return;
-    }
-
-    let repos = manifest::read_manifest(diwa_dir);
-
-    for slug in slugs {
-        let flag = queue.join(&slug);
-
-        // Delete BEFORE indexing so any commits landing during the index
-        // run create a fresh flag that the next pass picks up.
-        let _ = fs::remove_file(&flag);
-
-        let Some(path) = repos.get(&slug) else {
-            log_line(
-                diwa_dir,
-                &format!("unknown repo slug '{slug}' (not in manifest), skipping"),
-            );
-            continue;
-        };
-
+/// One pass over every registered repo. A failure on one repo is logged and
+/// never stops the others (a private repo losing access must not freeze the rest).
+fn sweep(diwa_dir: &Path) {
+    let mut repos: Vec<_> = manifest::read_manifest(diwa_dir).into_iter().collect();
+    repos.sort();
+    for (slug, path) in repos {
         if !path.exists() {
-            log_line(
-                diwa_dir,
-                &format!("path missing for '{slug}': {}", path.display()),
-            );
+            log_line(diwa_dir, &format!("path missing for '{slug}': {}", path.display()));
             continue;
         }
-
-        log_line(diwa_dir, &format!("indexing {slug}"));
-        match crate::run_index(path, 5000, 8, false) {
+        // Only hub-managed mirrors are ours to fetch; a registered working
+        // checkout (pre-hub entry) is indexed as it is.
+        if path.extension().is_some_and(|e| e == "git") {
+            if let Err(e) = mirror::fetch(&path) {
+                log_line(diwa_dir, &format!("fetch failed {slug}: {e:#}"));
+                continue;
+            }
+        }
+        match crate::run_index(&path, 5000, 8, false) {
             Ok(_) => log_line(diwa_dir, &format!("done {slug}")),
             Err(e) => log_line(diwa_dir, &format!("error {slug}: {e:#}")),
         }

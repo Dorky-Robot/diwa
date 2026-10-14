@@ -143,14 +143,6 @@ pub enum Commands {
     /// Upgrade diwa to the latest release
     Upgrade,
 
-    /// Mark a repo as dirty so the daemon picks it up. Called by git hooks.
-    #[command(hide = true)]
-    Enqueue {
-        /// Target directory (default: current dir)
-        #[arg(default_value = ".")]
-        dir: PathBuf,
-    },
-
     /// Migrate existing repos to the daemon-based indexing model
     Migrate,
 
@@ -182,7 +174,6 @@ fn main() {
     let skip_update_check = matches!(
         cli.command,
         Commands::Upgrade
-            | Commands::Enqueue { .. }
             | Commands::Daemon {
                 action: DaemonAction::Run
             }
@@ -267,7 +258,6 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Ls => run_ls(),
         Commands::Stats { repo } => run_stats(&repo),
         Commands::Upgrade => cmd_upgrade(),
-        Commands::Enqueue { dir } => run_enqueue(&dir),
         Commands::Migrate => migrate::run(&diwa_dir()),
         Commands::Daemon { action } => match action {
             DaemonAction::Install => daemon::install(),
@@ -285,15 +275,6 @@ fn run_add(full_name: &str, max_commits: usize, batch_size: usize) -> Result<()>
     let (owner, name) = mirror::parse_full_name(full_name)?;
     manifest::register_repo(&diwa, &format!("{owner}--{name}"), &path)?;
     run_index(&path, max_commits, batch_size, false)
-}
-
-fn run_enqueue(dir: &Path) -> Result<()> {
-    let resolved = repo::resolve_repo(dir)?;
-    let slug = format!("{}--{}", resolved.owner, resolved.name);
-    let queue = diwa_dir().join("queue");
-    std::fs::create_dir_all(&queue)?;
-    std::fs::write(queue.join(&slug), b"")?;
-    Ok(())
 }
 
 fn diwa_dir() -> PathBuf {
