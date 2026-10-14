@@ -150,9 +150,12 @@ pub fn prompt(text: &str) -> Result<String> {
     let stderr = err_reader.join().unwrap_or_default();
 
     if !status.success() {
+        // `claude -p` reports e.g. an expired login on stdout, not stderr.
+        let out = String::from_utf8_lossy(&stdout);
         anyhow::bail!(
-            "claude exited with error: {}",
-            String::from_utf8_lossy(&stderr)
+            "claude exited with error: {} {}",
+            String::from_utf8_lossy(&stderr).trim(),
+            out.trim().chars().take(300).collect::<String>()
         );
     }
 

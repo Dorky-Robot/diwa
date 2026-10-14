@@ -91,3 +91,50 @@ fn test_index_not_a_git_repo() {
         .unwrap();
     assert!(!output.status.success());
 }
+
+/// When `claude` cannot run (expired login), indexing must fail loudly and
+/// leave the watermark alone, so the commits are retried rather than lost.
+#[test]
+fn test_index_does_not_advance_when_claude_fails() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let o = Command::new("git").args(args).current_dir(&repo).output().unwrap();
+        assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+    };
+    git(&["init", "-q"]);
+    git(&["remote", "add", "origin", "https://github.com/acme/widget.git"]);
+    std::fs::write(repo.join("a.txt"), "one").unwrap();
+    git(&["add", "."]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "first"]);
+
+    // A fake `claude` that fails the way an expired login does.
+    let bin = tmp.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = bin.join("claude");
+    std::fs::write(&fake, "#!/bin/sh\necho 'Failed to authenticate: OAuth session expired'\nexit 1\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let home = tmp.path().join("home");
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let out = Command::new(diwa_bin())
+        .args(["index", repo.to_str().unwrap()])
+        .env("DIWA_DIR", &home)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "index must fail when claude is unavailable");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("without advancing the watermark"), "stderr: {err}");
+
+    let stats = Command::new(diwa_bin())
+        .args(["stats", repo.to_str().unwrap()])
+        .env("DIWA_DIR", &home)
+        .output()
+        .unwrap();
+    let s = String::from_utf8_lossy(&stats.stdout);
+    assert!(s.contains("Insights:      0"), "stats: {s}");
+    assert!(!s.contains("Last indexed:  ") || s.contains("Last indexed:  never") || s.contains("Last indexed:  -") || s.contains("none"), "stats: {s}");
+}

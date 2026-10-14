@@ -10,28 +10,30 @@ const MAX_PROMPT_CHARS: usize = 12_000;
 /// Extract insights from a batch of commits using `claude -p`.
 ///
 /// On failure, returns an empty vec and prints a warning.
-pub fn extract_insights(commits: &[CommitData]) -> Vec<Insight> {
-    match try_extract(commits) {
-        Ok(insights) => insights,
-        Err(e) => {
-            eprintln!(
-                "Warning: insight extraction failed for batch ({} commits): {e}",
-                commits.len()
-            );
-            Vec::new()
-        }
-    }
-}
-
-fn try_extract(commits: &[CommitData]) -> anyhow::Result<Vec<Insight>> {
+/// Extract insights for one batch.
+///
+/// `Err` means Claude itself could not be run (not logged in, timeout, spawn
+/// failure). The caller must NOT advance the watermark then: those commits
+/// have not been looked at and a later run has to retry them. A reply that
+/// arrives but cannot be parsed is a property of that batch, so it is warned
+/// about and yields no insights (otherwise one bad batch would block a repo
+/// forever).
+pub fn extract_insights(commits: &[CommitData]) -> anyhow::Result<Vec<Insight>> {
     if commits.is_empty() {
         return Ok(Vec::new());
     }
-
     let prompt = build_prompt(commits);
     let response = claude::prompt(&prompt)?;
-    let raw: Vec<RawInsight> = claude::parse_json_array(&response)?;
-    Ok(hydrate(raw, commits))
+    match claude::parse_json_array::<RawInsight>(&response) {
+        Ok(raw) => Ok(hydrate(raw, commits)),
+        Err(e) => {
+            eprintln!(
+                "Warning: unparseable extraction reply for batch ({} commits): {e}",
+                commits.len()
+            );
+            Ok(Vec::new())
+        }
+    }
 }
 
 fn build_prompt(commits: &[CommitData]) -> String {

@@ -403,7 +403,21 @@ pub(crate) fn run_index(
         print!("  Batch {}/{total_batches}...", i + 1);
 
         // Start Claude extraction (blocking — this is the slow part).
-        let insights = extract::extract_insights(batch);
+        let insights = match extract::extract_insights(batch) {
+            Ok(i) => i,
+            Err(e) => {
+                // Claude could not run. Store what earlier batches produced,
+                // leave the watermark where it is, and let the next run retry.
+                println!();
+                if let Some(handle) = pending.take() {
+                    if let Ok(Ok((pi, pe, psha))) = handle.join() {
+                        db.insert_insights_with_embeddings(&pi, pe.as_deref())?;
+                        db.set_last_indexed_sha(&psha)?;
+                    }
+                }
+                anyhow::bail!("insight extraction unavailable, stopping without advancing the watermark: {e:#}");
+            }
+        };
         let last_sha = batch.last().map(|c| c.sha.clone()).unwrap_or_default();
 
         // While we wait for nothing here, flush the previous batch's embeddings.
