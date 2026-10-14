@@ -69,6 +69,7 @@ pub fn run(diwa_dir: &Path) -> Result<()> {
 fn sweep(diwa_dir: &Path) {
     let mut repos: Vec<_> = manifest::read_manifest(diwa_dir).into_iter().collect();
     repos.sort();
+    let max_commits = sweep_max_commits();
     for (slug, path) in repos {
         if !path.exists() {
             log_line(diwa_dir, &format!("path missing for '{slug}': {}", path.display()));
@@ -82,11 +83,22 @@ fn sweep(diwa_dir: &Path) {
                 continue;
             }
         }
-        match crate::run_index(&path, 5000, 8, false) {
+        match crate::run_index(&path, max_commits, 8, false) {
             Ok(_) => log_line(diwa_dir, &format!("done {slug}")),
             Err(e) => log_line(diwa_dir, &format!("error {slug}: {e:#}")),
         }
     }
+}
+
+/// Commits one repo may index per sweep (`DIWA_SWEEP_MAX_COMMITS`, default
+/// 5000). Lowering it throttles a backfill: each sweep does a bounded slice
+/// and the next one resumes from the watermark, so spend is watchable.
+fn sweep_max_commits() -> usize {
+    std::env::var("DIWA_SWEEP_MAX_COMMITS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(5000)
 }
 
 fn log_line(diwa_dir: &Path, msg: &str) {
@@ -140,7 +152,7 @@ pub fn install() -> Result<()> {
 
     // Carry the settings that make this instance what it is into the plist.
     let mut extra_env = String::new();
-    for key in ["DIWA_DIR", "DIWA_MODEL", "DIWA_EFFORT", "DIWA_POLL_SECS", "DIWA_CLAUDE_TIMEOUT_SECS", "DIWA_GITHUB_BASE"] {
+    for key in ["DIWA_DIR", "DIWA_MODEL", "DIWA_EFFORT", "DIWA_POLL_SECS", "DIWA_CLAUDE_TIMEOUT_SECS", "DIWA_GITHUB_BASE", "DIWA_SWEEP_MAX_COMMITS"] {
         if let Ok(v) = std::env::var(key) {
             extra_env.push_str(&format!(
                 "\n        <key>{key}</key>\n        <string>{}</string>",

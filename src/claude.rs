@@ -55,7 +55,7 @@ fn build_args(model: &str, effort: &str) -> Vec<String> {
     let mut args: Vec<String> = [
         "-p",
         "--output-format",
-        "text",
+        "json",
         "--setting-sources",
         "project",
         "--no-session-persistence",
@@ -159,7 +159,68 @@ pub fn prompt(text: &str) -> Result<String> {
         );
     }
 
-    Ok(String::from_utf8_lossy(&stdout).trim().to_string())
+    let raw = String::from_utf8_lossy(&stdout).trim().to_string();
+    let env = parse_envelope(&raw);
+    if env.is_error {
+        anyhow::bail!("claude reported an error: {}", env.text.chars().take(300).collect::<String>());
+    }
+    record_cost(&model, &effort, &env);
+    Ok(env.text)
+}
+
+/// What `claude -p --output-format json` returns, reduced to what we use.
+#[derive(Debug, PartialEq)]
+pub(crate) struct Envelope {
+    pub text: String,
+    pub is_error: bool,
+    pub cost_usd: f64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+/// Parse the JSON envelope; anything that is not one is treated as plain text.
+pub(crate) fn parse_envelope(raw: &str) -> Envelope {
+    let plain = || Envelope {
+        text: raw.to_string(),
+        is_error: false,
+        cost_usd: 0.0,
+        input_tokens: 0,
+        output_tokens: 0,
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return plain();
+    };
+    let Some(text) = v.get("result").and_then(|r| r.as_str()) else {
+        return plain();
+    };
+    let u = |k: &str| v["usage"][k].as_u64().unwrap_or(0);
+    Envelope {
+        text: text.to_string(),
+        is_error: v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false),
+        cost_usd: v.get("total_cost_usd").and_then(|c| c.as_f64()).unwrap_or(0.0),
+        input_tokens: u("input_tokens") + u("cache_creation_input_tokens") + u("cache_read_input_tokens"),
+        output_tokens: u("output_tokens"),
+    }
+}
+
+/// One line per call in `<diwa dir>/cost.jsonl`, so spend can be summed
+/// (`jq -s 'map(.cost_usd)|add'`). Best effort: never fails a call.
+fn record_cost(model: &str, effort: &str, env: &Envelope) {
+    let base = match std::env::var_os("DIWA_DIR") {
+        Some(d) => PathBuf::from(d),
+        None => match std::env::var_os("HOME") {
+            Some(h) => PathBuf::from(h).join(".diwa"),
+            None => return,
+        },
+    };
+    let line = serde_json::json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "model": model, "effort": effort,
+        "cost_usd": env.cost_usd, "in": env.input_tokens, "out": env.output_tokens,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(base.join("cost.jsonl")) {
+        let _ = writeln!(f, "{line}");
+    }
 }
 
 /// Deserialize `tags` from either a string or an array of strings.
@@ -286,5 +347,27 @@ mod tests {
     fn test_parse_garbage_fails() {
         let result: Result<Vec<serde_json::Value>> = parse_json_array("not json at all");
         assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod envelope_tests {
+    use super::*;
+
+    #[test]
+    fn parses_result_cost_and_tokens() {
+        let e = parse_envelope(r#"{"result":"[]","is_error":false,"total_cost_usd":0.0125,"usage":{"input_tokens":2,"cache_creation_input_tokens":1983,"cache_read_input_tokens":5,"output_tokens":14}}"#);
+        assert_eq!(e.text, "[]");
+        assert!(!e.is_error);
+        assert!((e.cost_usd - 0.0125).abs() < 1e-9);
+        assert_eq!((e.input_tokens, e.output_tokens), (1990, 14));
+    }
+
+    #[test]
+    fn error_flag_and_plain_text_fallback() {
+        assert!(parse_envelope(r#"{"result":"nope","is_error":true}"#).is_error);
+        let p = parse_envelope("just text");
+        assert_eq!(p.text, "just text");
+        assert!(!p.is_error);
     }
 }
