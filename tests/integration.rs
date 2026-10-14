@@ -24,7 +24,6 @@ fn test_help() {
     assert!(stdout.contains("diwa"));
     assert!(stdout.contains("index"));
     assert!(stdout.contains("search"));
-    assert!(stdout.contains("browse"));
     assert!(stdout.contains("add"));
     assert!(stdout.contains("stats"));
 }

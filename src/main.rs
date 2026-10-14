@@ -1,4 +1,3 @@
-mod browse;
 mod claude;
 mod daemon;
 mod db;
@@ -103,13 +102,6 @@ pub enum Commands {
         repo: String,
     },
 
-    /// Browse insights in a scrollable TUI
-    Browse {
-        /// Repo name or path (default: current dir)
-        #[arg(default_value = ".")]
-        repo: String,
-    },
-
     /// Fetch and reindex all registered repos now (the daemon does this on a timer)
     Update,
 
@@ -181,7 +173,6 @@ fn run(cli: Cli) -> Result<()> {
         } => run_search(&repo, &query, n, json, deep),
         Commands::Reflect { repo } => run_reflect(&repo),
         Commands::Update => run_update(),
-        Commands::Browse { repo } => run_browse(&repo),
         Commands::Ls => run_ls(),
         Commands::Stats { repo } => run_stats(&repo),
         Commands::Daemon { action } => match action {
@@ -824,16 +815,6 @@ fn run_update() -> Result<()> {
             failed.join(", ")
         )
     }
-}
-
-fn run_browse(repo_arg: &str) -> Result<()> {
-    let diwa = diwa_dir();
-    let slug = resolve_slug(repo_arg)?;
-    let db = db::IndexDb::open(&diwa, &slug)?;
-    let insights = db.list_all()?;
-    let display_name = slug.replace("--", "/");
-
-    browse::run_browse(insights, &display_name)
 }
 
 fn run_ls() -> Result<()> {
