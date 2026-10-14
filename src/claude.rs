@@ -1,9 +1,11 @@
 //! Shared utilities for interacting with the Claude CLI.
 
 use anyhow::{Context, Result};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// Directory `claude` runs in. The CLI treats its cwd as a project root and
 /// walks it gathering context — run it from wherever the caller happens to
@@ -24,34 +26,136 @@ fn claude_cwd() -> Option<PathBuf> {
     Some(cwd)
 }
 
+/// Model alias handed to `claude --model`. `sonnet` tracks the current Sonnet;
+/// override with `DIWA_MODEL` (an alias or a full id such as
+/// `claude-haiku-4-5-20251001`). Sonnet at low effort won the extraction
+/// comparison in docs/qwen-eval: best "why" on the hard commits, ~9s each.
+const DEFAULT_MODEL: &str = "sonnet";
+
+/// Effort passed to `claude --effort`. Override with `DIWA_EFFORT`
+/// (low|medium|high|xhigh|max). `off` omits the flag and sets
+/// MAX_THINKING_TOKENS=0, which is what makes Haiku 4.5 fast and cheap: its
+/// default is to think for ~2k tokens per commit and `--effort low` does not stop that.
+const DEFAULT_EFFORT: &str = "low";
+
+/// A call that has not finished by now is hung (the known failure is user
+/// hooks loading in headless mode). Override with `DIWA_CLAUDE_TIMEOUT_SECS`.
+const DEFAULT_TIMEOUT_SECS: u64 = 300;
+
+const SYSTEM_PROMPT: &str = "You are one step in a developer tool. Follow the instructions in the user message exactly and output only what they ask for.";
+
+/// Arguments for one headless call. Each flag removes a measured cost:
+/// - `--setting-sources project`: user settings (hooks) make headless `-p` hang.
+/// - `--tools ""` + custom system prompt + no MCP/slash commands: the default
+///   Claude Code prompt and tool/connector list is ~45k input tokens per call;
+///   this trims it to ~2k, which matters when the quota is a Max subscription.
+/// - `--no-session-persistence`: no transcript litter per call.
+fn build_args(model: &str, effort: &str) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-p",
+        "--output-format",
+        "text",
+        "--setting-sources",
+        "project",
+        "--no-session-persistence",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--disable-slash-commands",
+        "--system-prompt",
+        SYSTEM_PROMPT,
+        "--model",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    args.push(model.to_string());
+    if effort != "off" {
+        args.push("--effort".into());
+        args.push(effort.to_string());
+    }
+    args
+}
+
+fn env_or(key: &str, default: &str) -> String {
+    match std::env::var(key) {
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => default.to_string(),
+    }
+}
+
 /// Send a prompt to `claude -p` and return the response text.
 pub fn prompt(text: &str) -> Result<String> {
+    let model = env_or("DIWA_MODEL", DEFAULT_MODEL);
+    let effort = env_or("DIWA_EFFORT", DEFAULT_EFFORT);
+    let timeout = Duration::from_secs(
+        env_or("DIWA_CLAUDE_TIMEOUT_SECS", "")
+            .parse()
+            .unwrap_or(DEFAULT_TIMEOUT_SECS),
+    );
+
     let mut cmd = Command::new("claude");
     if let Some(cwd) = claude_cwd() {
         cmd.current_dir(cwd);
     }
+    if effort == "off" {
+        cmd.env("MAX_THINKING_TOKENS", "0");
+    }
     let mut child = cmd
-        .args(["-p", "--output-format", "text"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .args(build_args(&model, &effort))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .context("failed to run claude CLI — is it installed and authenticated?")?;
 
-    child
-        .stdin
-        .as_mut()
-        .context("failed to write to claude stdin")?
-        .write_all(text.as_bytes())?;
+    // Feed stdin and drain both pipes on their own threads so a large prompt
+    // or large reply cannot deadlock against the timeout loop below.
+    let mut stdin = child.stdin.take().context("failed to open claude stdin")?;
+    let input = text.to_string();
+    let writer = thread::spawn(move || {
+        let _ = stdin.write_all(input.as_bytes());
+    });
+    let mut stdout = child.stdout.take().context("failed to open claude stdout")?;
+    let mut stderr = child.stderr.take().context("failed to open claude stderr")?;
+    let out_reader = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+    let err_reader = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr.read_to_end(&mut buf);
+        buf
+    });
 
-    let output = child.wait_with_output().context("claude process failed")?;
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait().context("claude process failed")? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!(
+                "claude timed out after {}s (model {model}, effort {effort}) and was killed",
+                timeout.as_secs()
+            );
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+    let _ = writer.join();
+    let stdout = out_reader.join().unwrap_or_default();
+    let stderr = err_reader.join().unwrap_or_default();
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("claude exited with error: {stderr}");
+    if !status.success() {
+        anyhow::bail!(
+            "claude exited with error: {}",
+            String::from_utf8_lossy(&stderr)
+        );
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&stdout).trim().to_string())
 }
 
 /// Try to parse a JSON array from Claude's response.
@@ -101,6 +205,21 @@ fn extract_json_from_fences(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn args_carry_model_effort_and_the_hang_guard() {
+        let a = build_args("sonnet", "low");
+        let pos = |f: &str| a.iter().position(|x| x == f).unwrap();
+        assert_eq!(a[pos("--setting-sources") + 1], "project");
+        assert_eq!(a[pos("--model") + 1], "sonnet");
+        assert_eq!(a[pos("--effort") + 1], "low");
+        assert_eq!(a[pos("--tools") + 1], "");
+    }
+
+    #[test]
+    fn effort_off_omits_the_flag() {
+        assert!(!build_args("claude-haiku-4-5-20251001", "off").contains(&"--effort".to_string()));
+    }
 
     #[test]
     fn test_parse_clean_json() {
