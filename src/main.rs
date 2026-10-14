@@ -42,6 +42,9 @@ pub enum Commands {
         /// Commits per Claude batch
         #[arg(long, default_value = "8")]
         batch_size: usize,
+        /// Only mirror and register; leave indexing to the daemon
+        #[arg(long)]
+        no_index: bool,
     },
 
     /// Index git history (incremental)
@@ -158,7 +161,8 @@ fn run(cli: Cli) -> Result<()> {
             full_name,
             max_commits,
             batch_size,
-        } => run_add(&full_name, max_commits, batch_size),
+            no_index,
+        } => run_add(&full_name, max_commits, batch_size, no_index),
         Commands::Reindex {
             dir,
             max_commits,
@@ -185,11 +189,15 @@ fn run(cli: Cli) -> Result<()> {
 }
 
 /// Hub entry point: make sure a bare mirror exists and is fresh, register it, index it.
-fn run_add(full_name: &str, max_commits: usize, batch_size: usize) -> Result<()> {
+fn run_add(full_name: &str, max_commits: usize, batch_size: usize, no_index: bool) -> Result<()> {
     let diwa = diwa_dir();
     let path = mirror::ensure(&diwa, full_name)?;
     let (owner, name) = mirror::parse_full_name(full_name)?;
     manifest::register_repo(&diwa, &format!("{owner}--{name}"), &path)?;
+    if no_index {
+        println!("Registered {owner}/{name} -> {}", path.display());
+        return Ok(());
+    }
     run_index(&path, max_commits, batch_size, false)
 }
 

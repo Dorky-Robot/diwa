@@ -140,7 +140,7 @@ pub fn install() -> Result<()> {
 
     // Carry the settings that make this instance what it is into the plist.
     let mut extra_env = String::new();
-    for key in ["DIWA_DIR", "DIWA_MODEL", "DIWA_EFFORT", "DIWA_POLL_SECS", "DIWA_CLAUDE_TIMEOUT_SECS"] {
+    for key in ["DIWA_DIR", "DIWA_MODEL", "DIWA_EFFORT", "DIWA_POLL_SECS", "DIWA_CLAUDE_TIMEOUT_SECS", "DIWA_GITHUB_BASE"] {
         if let Ok(v) = std::env::var(key) {
             extra_env.push_str(&format!(
                 "\n        <key>{key}</key>\n        <string>{}</string>",
