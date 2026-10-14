@@ -14,6 +14,8 @@
 #    runs this through `ssh localhost` (see com.dorky-robot.diwa-hub-replicate).
 # The bare mirrors are not copied; they are re-cloned from GitHub.
 set -eu
+# launchd/ssh shells start with a bare PATH; `mount` lives in /sbin.
+PATH=/sbin:/usr/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH
 
 DIWA_DIR=${DIWA_DIR:-$HOME/.diwa-hub}
 VOLUME=${HUB_VOLUME:-/Volumes/Orange4TB}
