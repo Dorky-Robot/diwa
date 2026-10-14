@@ -317,3 +317,35 @@ mod tests {
         assert_eq!(batches[1].len(), 5);
     }
 }
+
+/// True when `sha` names a commit present in the repo at `path`.
+pub fn commit_exists(path: &std::path::Path, sha: &str) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["cat-file", "-e", &format!("{sha}^{{commit}}")])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod commit_exists_tests {
+    use super::*;
+
+    #[test]
+    fn missing_sha_is_not_a_commit() {
+        let d = std::env::temp_dir().join(format!("diwa-ce-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let git = |a: &[&str]| {
+            std::process::Command::new("git").arg("-C").arg(&d).args(a).output().unwrap()
+        };
+        git(&["init", "-q"]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"]);
+        let head = String::from_utf8(git(&["rev-parse", "HEAD"]).stdout).unwrap();
+        assert!(commit_exists(&d, head.trim()));
+        assert!(!commit_exists(&d, "506f9cfc3ef2e8eb186e4f06f3a0b3b5b33ea169"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}

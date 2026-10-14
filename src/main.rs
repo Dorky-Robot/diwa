@@ -325,6 +325,19 @@ pub(crate) fn run_index(
     } else {
         db.last_indexed_sha()?
     };
+    // A watermark the repo no longer has (it lived on an unpushed branch or
+    // was rewritten away) makes `git log <sha>..HEAD` fail forever. Walk from
+    // the start instead; commits that already have insights are skipped below.
+    let since_sha = match since_sha {
+        Some(sha) if !git::commit_exists(&resolved.local_path, &sha) => {
+            println!(
+                "Watermark {} is not in this repo; walking its history, skipping commits already indexed.",
+                &sha[..7.min(sha.len())]
+            );
+            None
+        }
+        other => other,
+    };
 
     if let Some(ref sha) = since_sha {
         println!(
