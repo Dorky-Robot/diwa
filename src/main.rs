@@ -10,6 +10,7 @@ mod github;
 mod install;
 mod manifest;
 mod migrate;
+mod mirror;
 mod reflect;
 mod repo;
 mod sanitize;
@@ -35,6 +36,18 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
+    /// Register org/name on the hub: clone it bare, then index it
+    Add {
+        /// GitHub repo as org/name
+        full_name: String,
+        /// Max commits to process
+        #[arg(long, default_value = "5000")]
+        max_commits: usize,
+        /// Commits per Claude batch
+        #[arg(long, default_value = "8")]
+        batch_size: usize,
+    },
+
     /// Index git history (incremental)
     Index {
         /// Target directory (default: current dir)
@@ -229,6 +242,11 @@ fn run(cli: Cli) -> Result<()> {
             max_commits,
             batch_size,
         } => run_index(&dir, max_commits, batch_size, false),
+        Commands::Add {
+            full_name,
+            max_commits,
+            batch_size,
+        } => run_add(&full_name, max_commits, batch_size),
         Commands::Reindex {
             dir,
             max_commits,
@@ -258,6 +276,15 @@ fn run(cli: Cli) -> Result<()> {
             DaemonAction::Run => daemon::run(&diwa_dir()),
         },
     }
+}
+
+/// Hub entry point: make sure a bare mirror exists and is fresh, register it, index it.
+fn run_add(full_name: &str, max_commits: usize, batch_size: usize) -> Result<()> {
+    let diwa = diwa_dir();
+    let path = mirror::ensure(&diwa, full_name)?;
+    let (owner, name) = mirror::parse_full_name(full_name)?;
+    manifest::register_repo(&diwa, &format!("{owner}--{name}"), &path)?;
+    run_index(&path, max_commits, batch_size, false)
 }
 
 fn run_enqueue(dir: &Path) -> Result<()> {
