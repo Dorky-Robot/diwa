@@ -145,7 +145,7 @@ fn main() {
 
 /// What one indexing batch hands back to the pipeline: the insights Claude
 /// extracted, their embeddings, and the batch's last SHA (the new watermark).
-type BatchPayload = anyhow::Result<(Vec<db::Insight>, Vec<Vec<f32>>, String)>;
+type BatchPayload = anyhow::Result<(Vec<db::Insight>, Option<Vec<Vec<f32>>>, String)>;
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
@@ -410,7 +410,7 @@ pub(crate) fn run_index(
         if let Some(handle) = pending.take() {
             match handle.join() {
                 Ok(Ok((prev_insights, prev_embeddings, prev_sha))) => {
-                    db.insert_insights_with_embeddings(&prev_insights, Some(&prev_embeddings))?;
+                    db.insert_insights_with_embeddings(&prev_insights, prev_embeddings.as_deref())?;
                     db.set_last_indexed_sha(&prev_sha)?;
                     total_insights += prev_insights.len();
                 }
@@ -429,7 +429,15 @@ pub(crate) fn run_index(
                     .iter()
                     .map(|ins| ins.embedding_text())
                     .collect();
-                let embeddings = embed::embed_batch(&texts)?;
+                // Claude already spent quota on these; if embedding fails keep
+                // the insights (keyword search still works) rather than drop them.
+                let embeddings = match embed::embed_batch(&texts) {
+                    Ok(e) => Some(e),
+                    Err(e) => {
+                        eprintln!("\n  Warning: embedding failed, storing without vectors ({e:#})");
+                        None
+                    }
+                };
                 Ok((insights_clone, embeddings, sha))
             }));
         } else {
@@ -445,7 +453,7 @@ pub(crate) fn run_index(
     if let Some(handle) = pending.take() {
         match handle.join() {
             Ok(Ok((prev_insights, prev_embeddings, prev_sha))) => {
-                db.insert_insights_with_embeddings(&prev_insights, Some(&prev_embeddings))?;
+                db.insert_insights_with_embeddings(&prev_insights, prev_embeddings.as_deref())?;
                 db.set_last_indexed_sha(&prev_sha)?;
                 total_insights += prev_insights.len();
             }
