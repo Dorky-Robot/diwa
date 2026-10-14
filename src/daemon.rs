@@ -187,33 +187,6 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 
-/// Bootout the LaunchAgent if currently loaded. Used during `diwa upgrade`
-/// to release the running daemon's hold on the old binary cleanly before
-/// the new tarball is written into place — without this, the running
-/// daemon keeps the old inode mapped while a new binary appears at the
-/// same path, which is the exact condition that triggers macOS TCC to
-/// re-prompt for Photos / Contacts / Calendar on Sonoma+. No-op on
-/// non-macOS or if the agent isn't installed.
-pub fn bootout_if_loaded() {
-    if !cfg!(target_os = "macos") {
-        return;
-    }
-    let Ok(plist_file) = plist_path() else {
-        return;
-    };
-    if !plist_file.exists() {
-        return;
-    }
-    let Ok(uid) = current_uid() else {
-        return;
-    };
-    let domain = format!("gui/{uid}");
-    // Captured, not printed — see the note in `install()`.
-    let _ = Command::new("launchctl")
-        .args(["bootout", &domain, &plist_file.to_string_lossy()])
-        .output();
-}
-
 /// Ad-hoc code-sign a binary so macOS TCC has a stable cdhash to track.
 /// Without this, the unsigned LaunchAgent binary that gets swapped in by
 /// `diwa upgrade` / `brew upgrade diwa` triggers speculative Photos /
