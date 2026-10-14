@@ -1,0 +1,905 @@
+[
+ {
+  "repo": "Dorky-Robot/diwa",
+  "sha": "a83172980736906c4e0fcac7bf7903e13cf50bf6",
+  "subject": "Add README with real yelo example, install script, Dockerfile",
+  "wall": 10.395974159240723,
+  "result": "```json\n[\n  {\n    \"commit_sha\": \"a83172980736906c4e0fcac7bf7903e13cf50bf6\",\n    \"category\": \"architecture\",\n    \"title\": \"Hybrid FTS5 + vector search validated against real-world terse commit history\",\n    \"body\": \"The README demo uses a 38-commit repo rewritten from Go to Rust to show that diwa's search can surface migration insights even when the result text never mentions 'language' or 'migration'. This validates the hybrid full-text + semantic embedding approach as necessary because real commit messages are often too terse for keyword search alone to find conceptual answers.\",\n    \"files\": [\"README.md\"],\n    \"tags\": [\"search\", \"fts5\", \"vector-search\", \"demo\", \"architecture\"]\n  },\n  {\n    \"commit_sha\": \"a83172980736906c4e0fcac7bf7903e13cf50bf6\",\n    \"category\": \"decision\",\n    \"title\": \"Support three install paths to lower adoption friction\",\n    \"body\": \"Chose to offer Homebrew tap, a curl install script with a cargo-build fallback, and a Docker image bundling Claude CLI and gh CLI. This spreads install coverage across package-manager users, script-based CI/dotfiles workflows, and containerized environments without forcing one preferred path.\",\n    \"files\": [\"install.sh\", \"Dockerfile\"],\n    \"tags\": [\"install\", \"distribution\", \"docker\", \"cargo\", \"homebrew\"]\n  }\n]\n```",
+  "in_tok": 2278,
+  "out_tok": 486,
+  "think_tok": 0,
+  "cost": 0.013967999999999998,
+  "api_ms": 8611,
+  "is_error": false,
+  "parsed": null,
+  "parse_error": "could not parse JSON array (diwa parser would fail)",
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/diwa",
+  "sha": "9a3e54897cfdb8ce84eb633f722c15e2f479d6cd",
+  "subject": "Fold reflections into indexing, add browse TUI, ground truth verification",
+  "wall": 10.337974786758423,
+  "result": "```json\n[\n  {\n    \"commit_sha\": \"9a3e54897cfdb8ce84eb633f722c15e2f479d6cd\",\n    \"category\": \"architecture\",\n    \"title\": \"Reflections become a required final pass of indexing, not an optional extra\",\n    \"body\": \"Instead of treating Level 2 insight generation as a separate command, diwa now folds it into `diwa index` as the final step after per-commit extraction. This ensures reflections are always generated against a complete, consistent set of insights, and ties the deeper pattern-finding step to the same lifecycle as indexing rather than letting it drift out of sync.\",\n    \"files\": [\"src/reflect.rs\", \"src/main.rs\"],\n    \"tags\": \"architecture indexing insights workflow\"\n  },\n  {\n    \"commit_sha\": \"9a3e54897cfdb8ce84eb633f722c15e2f479d6cd\",\n    \"category\": \"decision\",\n    \"title\": \"Require ground-truth verification against the repo to prevent hallucinated reflections\",\n    \"body\": \"When generating higher-level reflections, Claude is given actual evidence (git log, file tree, file contents, merged PRs) alongside the extracted insights, and every claim must be verifiable against that evidence. This guards against the model inventing patterns that sound plausible but aren't actually supported by the codebase's history.\",\n    \"files\": [\"src/reflect.rs\"],\n    \"tags\": \"decision llm verification hallucination-prevention insights\"\n  },\n  {\n    \"commit_sha\": \"9a3e54897cfdb8ce84eb633f722c15e2f479d6cd\",\n    \"category\": \"pattern\",\n    \"title\": \"Responsive TUI layout: switch between side-by-side and full-screen based on terminal width\",\n    \"body\": \"The new `diwa browse` TUI detects terminal width and renders a side-by-side list/detail view on wide terminals but falls back to a full-screen list-then-detail flow on narrow ones, reusing the same navigation keybindings (j/k/Enter/h/Esc/n/p) across both layouts. This keeps a single codebase usable across varying terminal sizes without duplicating interaction logic.\",\n    \"files\": [\"src/browse.rs\"],\n    \"tags\": \"pattern tui ratatui responsive-design ux\"\n  }\n]\n```",
+  "in_tok": 2503,
+  "out_tok": 760,
+  "think_tok": 0,
+  "cost": 0.017608000000000002,
+  "api_ms": 8528,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "9a3e54897cfdb8ce84eb633f722c15e2f479d6cd",
+    "category": "architecture",
+    "title": "Reflections become a required final pass of indexing, not an optional extra",
+    "body": "Instead of treating Level 2 insight generation as a separate command, diwa now folds it into `diwa index` as the final step after per-commit extraction. This ensures reflections are always generated against a complete, consistent set of insights, and ties the deeper pattern-finding step to the same lifecycle as indexing rather than letting it drift out of sync.",
+    "files": [
+     "src/reflect.rs",
+     "src/main.rs"
+    ],
+    "tags": "architecture indexing insights workflow"
+   },
+   {
+    "commit_sha": "9a3e54897cfdb8ce84eb633f722c15e2f479d6cd",
+    "category": "decision",
+    "title": "Require ground-truth verification against the repo to prevent hallucinated reflections",
+    "body": "When generating higher-level reflections, Claude is given actual evidence (git log, file tree, file contents, merged PRs) alongside the extracted insights, and every claim must be verifiable against that evidence. This guards against the model inventing patterns that sound plausible but aren't actually supported by the codebase's history.",
+    "files": [
+     "src/reflect.rs"
+    ],
+    "tags": "decision llm verification hallucination-prevention insights"
+   },
+   {
+    "commit_sha": "9a3e54897cfdb8ce84eb633f722c15e2f479d6cd",
+    "category": "pattern",
+    "title": "Responsive TUI layout: switch between side-by-side and full-screen based on terminal width",
+    "body": "The new `diwa browse` TUI detects terminal width and renders a side-by-side list/detail view on wide terminals but falls back to a full-screen list-then-detail flow on narrow ones, reusing the same navigation keybindings (j/k/Enter/h/Esc/n/p) across both layouts. This keeps a single codebase usable across varying terminal sizes without duplicating interaction logic.",
+    "files": [
+     "src/browse.rs"
+    ],
+    "tags": "pattern tui ratatui responsive-design ux"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/diwa",
+  "sha": "59da26b4",
+  "subject": "Tune deep search \u2014 1-2 paragraphs, narrative with sources",
+  "wall": 7.451300859451294,
+  "result": "[{\"commit_sha\": \"59da26b4a711c790fc86b5b17656a014be7a663c\", \"category\": \"decision\", \"title\": \"Switch deep search output from terse answers to narrative synthesis with sources\", \"body\": \"The synthesis prompt originally forced short, 2-4 sentence answers with inline citations and no sources section, optimizing for brevity. This was revised to allow 1-2 paragraphs that tell a fuller story, including failed attempts, and explicitly require a trailing 'Sources:' line listing insight titles. The change reflects a shift in priority from terse Q&A toward narrative explanations that preserve context and provenance.\", \"files\": [\"src/deep_search.rs\"], \"tags\": \"deep-search prompt-engineering synthesis llm-output\"}]",
+  "in_tok": 1657,
+  "out_tok": 258,
+  "think_tok": 0,
+  "cost": 0.009204,
+  "api_ms": 5672,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "59da26b4a711c790fc86b5b17656a014be7a663c",
+    "category": "decision",
+    "title": "Switch deep search output from terse answers to narrative synthesis with sources",
+    "body": "The synthesis prompt originally forced short, 2-4 sentence answers with inline citations and no sources section, optimizing for brevity. This was revised to allow 1-2 paragraphs that tell a fuller story, including failed attempts, and explicitly require a trailing 'Sources:' line listing insight titles. The change reflects a shift in priority from terse Q&A toward narrative explanations that preserve context and provenance.",
+    "files": [
+     "src/deep_search.rs"
+    ],
+    "tags": "deep-search prompt-engineering synthesis llm-output"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/diwa",
+  "sha": "24bad57c",
+  "subject": "Rewrite README \u2014 lead with quick start, show real results, explain deep search and browse",
+  "wall": 5.892077922821045,
+  "result": "```json\n[\n  {\n    \"commit_sha\": \"24bad57c51abb1a125a8cc31ac7b7475076f4619\",\n    \"category\": \"decision\",\n    \"title\": \"README rewritten to lead with quick start and real-world proof\",\n    \"body\": \"The README was restructured to prioritize immediate usability\u2014quick start commands up front\u2014over abstract explanation. It also leans on a concrete example repo (yelo) to demonstrate diwa's value with real extracted insights rather than hypothetical descriptions. This reflects a documentation philosophy that showing real output builds more trust than describing features.\",\n    \"files\": [\"README.md\"],\n    \"tags\": \"documentation readme onboarding developer-experience\"\n  }\n]\n```",
+  "in_tok": 1926,
+  "out_tok": 236,
+  "think_tok": 0,
+  "cost": 0.01006,
+  "api_ms": 3933,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "24bad57c51abb1a125a8cc31ac7b7475076f4619",
+    "category": "decision",
+    "title": "README rewritten to lead with quick start and real-world proof",
+    "body": "The README was restructured to prioritize immediate usability\u2014quick start commands up front\u2014over abstract explanation. It also leans on a concrete example repo (yelo) to demonstrate diwa's value with real extracted insights rather than hypothetical descriptions. This reflects a documentation philosophy that showing real output builds more trust than describing features.",
+    "files": [
+     "README.md"
+    ],
+    "tags": "documentation readme onboarding developer-experience"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/diwa",
+  "sha": "a2f413d9",
+  "subject": "Fix CI: drop x86_64-apple-darwin target (ort-sys has no prebuilt binaries for it)",
+  "wall": 5.866396188735962,
+  "result": "[{\"commit_sha\": \"a2f413d9799c58c5128e3a118a7a9735d99e8579\", \"category\": \"bugfix\", \"title\": \"Drop x86_64-apple-darwin release target due to ort-sys binary gap\", \"body\": \"CI builds were failing because ort-sys does not publish prebuilt binaries for x86_64-apple-darwin. Rather than build ONNX Runtime from source for that target, the target was removed from the release matrix and the corresponding Homebrew formula branch was deleted. This limits macOS releases to aarch64 (Apple Silicon) only until upstream support exists.\", \"files\": [\".github/workflows/release.yml\"], \"tags\": \"ci release macos ort-sys build-targets\"}]",
+  "in_tok": 1562,
+  "out_tok": 244,
+  "think_tok": 0,
+  "cost": 0.008684,
+  "api_ms": 4046,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "a2f413d9799c58c5128e3a118a7a9735d99e8579",
+    "category": "bugfix",
+    "title": "Drop x86_64-apple-darwin release target due to ort-sys binary gap",
+    "body": "CI builds were failing because ort-sys does not publish prebuilt binaries for x86_64-apple-darwin. Rather than build ONNX Runtime from source for that target, the target was removed from the release matrix and the corresponding Homebrew formula branch was deleted. This limits macOS releases to aarch64 (Apple Silicon) only until upstream support exists.",
+    "files": [
+     ".github/workflows/release.yml"
+    ],
+    "tags": "ci release macos ort-sys build-targets"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/diwa",
+  "sha": "b160390af75ecdf1276b549ce8c0c7b760102f1e",
+  "subject": "Code cleanup: extract shared claude module, fix bugs, deduplicate",
+  "wall": 10.235240936279297,
+  "result": "[\n  {\n    \"commit_sha\": \"b160390af75ecdf1276b549ce8c0c7b760102f1e\",\n    \"category\": \"pattern\",\n    \"title\": \"Deduplicate Claude CLI interaction logic into shared module\",\n    \"body\": \"The prompt() and parse_json_array() functions were implemented separately in extract.rs, reflect.rs, and deep_search.rs, leading to ~120 lines of duplicated code and inconsistent behavior across modules. Extracting them into a shared claude.rs module reduced duplication and made fixing bugs in one place (like JSON parsing from markdown fences) benefit all three callers. This highlights the value of centralizing cross-cutting integration code (CLI subprocess calls, response parsing) rather than copy-pasting per-feature.\",\n    \"files\": [\"src/claude.rs\", \"src/deep_search.rs\", \"src/extract.rs\", \"src/main.rs\", \"src/reflect.rs\"],\n    \"tags\": \"refactor deduplication claude-cli rust shared-module\"\n  },\n  {\n    \"commit_sha\": \"b160390af75ecdf1276b549ce8c0c7b760102f1e\",\n    \"category\": \"bugfix\",\n    \"title\": \"Fix always-None pr_number and wrong repo identifier used for PR fetch\",\n    \"body\": \"extract.rs's hydrate function was unconditionally setting pr_number to None regardless of actual data, silently dropping PR associations. Separately, reflect.rs was using the filesystem path instead of the repository name when fetching PR data, causing lookups to fail or target the wrong repo. Both bugs stemmed from copy-pasted code paths that weren't updated to reflect the correct context (filesystem path vs. logical repo name), reinforcing the need for the shared module refactor.\",\n    \"files\": [\"src/extract.rs\", \"src/reflect.rs\"],\n    \"tags\": \"bugfix pr-metadata repo-identification\"\n  }\n]",
+  "in_tok": 2194,
+  "out_tok": 650,
+  "think_tok": 0,
+  "cost": 0.015271999999999999,
+  "api_ms": 8543,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "b160390af75ecdf1276b549ce8c0c7b760102f1e",
+    "category": "pattern",
+    "title": "Deduplicate Claude CLI interaction logic into shared module",
+    "body": "The prompt() and parse_json_array() functions were implemented separately in extract.rs, reflect.rs, and deep_search.rs, leading to ~120 lines of duplicated code and inconsistent behavior across modules. Extracting them into a shared claude.rs module reduced duplication and made fixing bugs in one place (like JSON parsing from markdown fences) benefit all three callers. This highlights the value of centralizing cross-cutting integration code (CLI subprocess calls, response parsing) rather than copy-pasting per-feature.",
+    "files": [
+     "src/claude.rs",
+     "src/deep_search.rs",
+     "src/extract.rs",
+     "src/main.rs",
+     "src/reflect.rs"
+    ],
+    "tags": "refactor deduplication claude-cli rust shared-module"
+   },
+   {
+    "commit_sha": "b160390af75ecdf1276b549ce8c0c7b760102f1e",
+    "category": "bugfix",
+    "title": "Fix always-None pr_number and wrong repo identifier used for PR fetch",
+    "body": "extract.rs's hydrate function was unconditionally setting pr_number to None regardless of actual data, silently dropping PR associations. Separately, reflect.rs was using the filesystem path instead of the repository name when fetching PR data, causing lookups to fail or target the wrong repo. Both bugs stemmed from copy-pasted code paths that weren't updated to reflect the correct context (filesystem path vs. logical repo name), reinforcing the need for the shared module refactor.",
+    "files": [
+     "src/extract.rs",
+     "src/reflect.rs"
+    ],
+    "tags": "bugfix pr-metadata repo-identification"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/diwa",
+  "sha": "d58988e4b18d60b5ae613fa75da60c8c8a8800f7",
+  "subject": "Optimize: pipeline indexing, parallel search, two-pass semantic retrieval",
+  "wall": 7.867575168609619,
+  "result": "[{\"commit_sha\":\"d58988e4b18d60b5ae613fa75da60c8c8a8800f7\",\"category\":\"pattern\",\"title\":\"Overlap slow LLM calls with fast embedding work to hide latency\",\"body\":\"Claude's per-batch processing (~5s) dominates indexing time while embedding generation is cheap (~50ms), so embeddings for batch N run in a background thread while Claude processes batch N+1, and query embeddings are computed concurrently with search context setup. This pipelining hides the fast operation's latency entirely behind the slow one instead of running them sequentially.\",\"files\":[\"src/db.rs\",\"src/main.rs\"],\"tags\":\"performance concurrency pipelining embeddings indexing search\"},{\"commit_sha\":\"d58988e4b18d60b5ae613fa75da60c8c8a8800f7\",\"category\":\"pattern\",\"title\":\"Two-pass semantic search avoids deserializing rows that get discarded\",\"body\":\"Semantic search originally loaded full rows (including JSON file arrays and strings) for every indexed item just to compute cosine similarity. Switching to a two-pass approach\u2014score raw (id, embedding) pairs first, then fetch full rows only for the top-N matches\u2014cuts unnecessary deserialization and allocation for rows that never make it into the results.\",\"files\":[\"src/db.rs\"],\"tags\":\"performance sqlite search optimization embeddings\"}]",
+  "in_tok": 2121,
+  "out_tok": 462,
+  "think_tok": 0,
+  "cost": 0.013099999999999999,
+  "api_ms": 6188,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "d58988e4b18d60b5ae613fa75da60c8c8a8800f7",
+    "category": "pattern",
+    "title": "Overlap slow LLM calls with fast embedding work to hide latency",
+    "body": "Claude's per-batch processing (~5s) dominates indexing time while embedding generation is cheap (~50ms), so embeddings for batch N run in a background thread while Claude processes batch N+1, and query embeddings are computed concurrently with search context setup. This pipelining hides the fast operation's latency entirely behind the slow one instead of running them sequentially.",
+    "files": [
+     "src/db.rs",
+     "src/main.rs"
+    ],
+    "tags": "performance concurrency pipelining embeddings indexing search"
+   },
+   {
+    "commit_sha": "d58988e4b18d60b5ae613fa75da60c8c8a8800f7",
+    "category": "pattern",
+    "title": "Two-pass semantic search avoids deserializing rows that get discarded",
+    "body": "Semantic search originally loaded full rows (including JSON file arrays and strings) for every indexed item just to compute cosine similarity. Switching to a two-pass approach\u2014score raw (id, embedding) pairs first, then fetch full rows only for the top-N matches\u2014cuts unnecessary deserialization and allocation for rows that never make it into the results.",
+    "files": [
+     "src/db.rs"
+    ],
+    "tags": "performance sqlite search optimization embeddings"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/diwa",
+  "sha": "2458cdefc2f8864a5b6de3f4dec374f437734341",
+  "subject": "Add diwa update \u2014 upgrades binary and refreshes all registered repos",
+  "wall": 7.16771936416626,
+  "result": "[{\"commit_sha\":\"2458cdefc2f8864a5b6de3f4dec374f437734341\",\"category\":\"architecture\",\"title\":\"Central manifest enables fleet-wide updates across registered repos\",\"body\":\"To allow `diwa update` to upgrade the binary and refresh hooks/index across every repo a user has initialized, diwa needed a way to track which repos are registered. A manifest file (~/.diwa/repos.json) is populated on `init` and cleaned up on `uninit`, giving a single source of truth for all tracked repos. This lets future improvements to extraction prompts or reflection logic propagate to all repos with one command instead of requiring per-repo re-init.\",\"files\":[\"src/main.rs\",\"src/manifest.rs\"],\"tags\":\"architecture cli manifest update multi-repo diwa\"}]",
+  "in_tok": 2302,
+  "out_tok": 269,
+  "think_tok": 0,
+  "cost": 0.011894,
+  "api_ms": 5367,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "2458cdefc2f8864a5b6de3f4dec374f437734341",
+    "category": "architecture",
+    "title": "Central manifest enables fleet-wide updates across registered repos",
+    "body": "To allow `diwa update` to upgrade the binary and refresh hooks/index across every repo a user has initialized, diwa needed a way to track which repos are registered. A manifest file (~/.diwa/repos.json) is populated on `init` and cleaned up on `uninit`, giving a single source of truth for all tracked repos. This lets future improvements to extraction prompts or reflection logic propagate to all repos with one command instead of requiring per-repo re-init.",
+    "files": [
+     "src/main.rs",
+     "src/manifest.rs"
+    ],
+    "tags": "architecture cli manifest update multi-repo diwa"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/diwa",
+  "sha": "7f36156352858b703276f548f4a3f3b747f20eae",
+  "subject": "Agentic deep search \u2014 follow threads like a human researcher",
+  "wall": 9.968127965927124,
+  "result": "[{\"commit_sha\": \"7f36156352858b703276f548f4a3f3b747f20eae\", \"category\": \"architecture\", \"title\": \"Deep search redesigned as iterative single-action agentic loop, not parallel strategy fan-out\", \"body\": \"The original deep search generated multiple search strategies upfront and ran them all in parallel, merging results into a single set for synthesis. This was replaced with an iterative loop where Claude takes one action at a time (search, git_show, read_file) based on what it just learned, mimicking how a human researcher follows threads of interest up to 10 steps. The upfront-fanout approach couldn't adapt to surprising findings mid-research, so sequential single-step reasoning was needed to let discoveries guide the next query.\", \"files\": [\"src/deep_search.rs\", \"src/main.rs\", \"src/spinner.rs\"], \"tags\": \"agentic-search deep-search architecture claude-tooling cli-ux\"}, {\"commit_sha\": \"7f36156352858b703276f548f4a3f3b747f20eae\", \"category\": \"pattern\", \"title\": \"Use a stderr spinner to signal progress without corrupting piped stdout\", \"body\": \"Long-running agentic loops need user feedback, but writing progress indicators to stdout would break downstream consumers piping the command's output. A braille spinner was added on stderr so the terminal stays responsive during the research loop while stdout remains clean for programmatic use.\", \"files\": [\"src/spinner.rs\"], \"tags\": \"cli-ux stderr-stdout spinner pattern\"}]",
+  "in_tok": 2139,
+  "out_tok": 512,
+  "think_tok": 0,
+  "cost": 0.013672,
+  "api_ms": 8315,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "7f36156352858b703276f548f4a3f3b747f20eae",
+    "category": "architecture",
+    "title": "Deep search redesigned as iterative single-action agentic loop, not parallel strategy fan-out",
+    "body": "The original deep search generated multiple search strategies upfront and ran them all in parallel, merging results into a single set for synthesis. This was replaced with an iterative loop where Claude takes one action at a time (search, git_show, read_file) based on what it just learned, mimicking how a human researcher follows threads of interest up to 10 steps. The upfront-fanout approach couldn't adapt to surprising findings mid-research, so sequential single-step reasoning was needed to let discoveries guide the next query.",
+    "files": [
+     "src/deep_search.rs",
+     "src/main.rs",
+     "src/spinner.rs"
+    ],
+    "tags": "agentic-search deep-search architecture claude-tooling cli-ux"
+   },
+   {
+    "commit_sha": "7f36156352858b703276f548f4a3f3b747f20eae",
+    "category": "pattern",
+    "title": "Use a stderr spinner to signal progress without corrupting piped stdout",
+    "body": "Long-running agentic loops need user feedback, but writing progress indicators to stdout would break downstream consumers piping the command's output. A braille spinner was added on stderr so the terminal stays responsive during the research loop while stdout remains clean for programmatic use.",
+    "files": [
+     "src/spinner.rs"
+    ],
+    "tags": "cli-ux stderr-stdout spinner pattern"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/diwa",
+  "sha": "45fd18b2463d0dd8fc2c1d4c7b76508745fd1637",
+  "subject": "0.3.3: add load-dynamic feature for glibc-independent ONNX loading",
+  "wall": 5.5669028759002686,
+  "result": "[{\"commit_sha\":\"45fd18b2463d0dd8fc2c1d4c7b76508745fd1637\",\"category\":\"decision\",\"title\":\"Optional dynamic loading of ONNX Runtime to avoid glibc coupling\",\"body\":\"Static linking against pre-built ONNX Runtime libs ties the binary to the glibc version of the build host, causing portability issues on other Linux systems. Adding an opt-in load-dynamic feature uses dlopen to load the shared library at runtime via fastembed's ort-load-dynamic, decoupling the binary from a specific glibc version. Kept as a non-default feature flag to avoid changing default build behavior.\",\"files\":[\"Cargo.toml\"],\"tags\":\"onnx glibc portability feature-flag fastembed linking\"}]",
+  "in_tok": 1586,
+  "out_tok": 260,
+  "think_tok": 0,
+  "cost": 0.00894,
+  "api_ms": 3771,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "45fd18b2463d0dd8fc2c1d4c7b76508745fd1637",
+    "category": "decision",
+    "title": "Optional dynamic loading of ONNX Runtime to avoid glibc coupling",
+    "body": "Static linking against pre-built ONNX Runtime libs ties the binary to the glibc version of the build host, causing portability issues on other Linux systems. Adding an opt-in load-dynamic feature uses dlopen to load the shared library at runtime via fastembed's ort-load-dynamic, decoupling the binary from a specific glibc version. Kept as a non-default feature flag to avoid changing default build behavior.",
+    "files": [
+     "Cargo.toml"
+    ],
+    "tags": "onnx glibc portability feature-flag fastembed linking"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/diwa",
+  "sha": "2a52ad7d0fa5217cc538b42e42a02cc969c39da8",
+  "subject": "0.3.5: idempotent indexing, stale hook cleanup, hook logging",
+  "wall": 12.535563945770264,
+  "result": "```json\n[\n  {\n    \"commit_sha\": \"2a52ad7d0fa5217cc538b42e42a02cc969c39da8\",\n    \"category\": \"bugfix\",\n    \"title\": \"Indexing must be idempotent to support incremental reruns\",\n    \"body\": \"Previously running `diwa index` repeatedly could duplicate insights for commits already processed. By tracking which commit SHAs already have insights (excluding reflections) and skipping them on rerun, indexing becomes safe to run repeatedly to fill gaps without creating duplicates.\",\n    \"files\": [\"src/db.rs\", \"src/main.rs\"],\n    \"tags\": \"idempotency indexing database rerun\"\n  },\n  {\n    \"commit_sha\": \"2a52ad7d0fa5217cc538b42e42a02cc969c39da8\",\n    \"category\": \"bugfix\",\n    \"title\": \"Hook installation must track and clean up stale hooks when core.hooksPath changes\",\n    \"body\": \"When a repo's core.hooksPath differs from the default .git/hooks (e.g. when using .husky), a previously installed diwa hook could be left behind in the inactive location, causing stale or duplicate hook execution. The fix detects this mismatch and removes the diwa hook from the old location, ensuring only the active hooks path has the hook installed.\",\n    \"files\": [\"src/install.rs\"],\n    \"tags\": \"git-hooks husky stale-state install\"\n  },\n  {\n    \"commit_sha\": \"2a52ad7d0fa5217cc538b42e42a02cc969c39da8\",\n    \"category\": \"decision\",\n    \"title\": \"Hook failures were undiagnosable because output was discarded to /dev/null\",\n    \"body\": \"The git hook originally redirected all output to /dev/null, making silent failures impossible to debug. Logging to ~/.diwa/hooks.log instead gives users a persistent record to diagnose issues without cluttering git command output.\",\n    \"files\": [\"src/install.rs\"],\n    \"tags\": \"logging diagnostics hooks observability\"\n  },\n  {\n    \"commit_sha\": \"2a52ad7d0fa5217cc538b42e42a02cc969c39da8\",\n    \"category\": \"decision\",\n    \"title\": \"Hook install should overwrite existing hooks so updates propagate\",\n    \"body\": \"install_hook previously no-op'd if a hook already existed, which meant `diwa update` could never deliver hook script improvements (like the logging fix) to existing installs. Changing it to update the hook script on re-install ensures fixes and features reach users who already have diwa hooks installed.\",\n    \"files\": [\"src/install.rs\"],\n    \"tags\": \"install update hooks propagation\"\n  }\n]\n```",
+  "in_tok": 2410,
+  "out_tok": 883,
+  "think_tok": 0,
+  "cost": 0.018466,
+  "api_ms": 10861,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "2a52ad7d0fa5217cc538b42e42a02cc969c39da8",
+    "category": "bugfix",
+    "title": "Indexing must be idempotent to support incremental reruns",
+    "body": "Previously running `diwa index` repeatedly could duplicate insights for commits already processed. By tracking which commit SHAs already have insights (excluding reflections) and skipping them on rerun, indexing becomes safe to run repeatedly to fill gaps without creating duplicates.",
+    "files": [
+     "src/db.rs",
+     "src/main.rs"
+    ],
+    "tags": "idempotency indexing database rerun"
+   },
+   {
+    "commit_sha": "2a52ad7d0fa5217cc538b42e42a02cc969c39da8",
+    "category": "bugfix",
+    "title": "Hook installation must track and clean up stale hooks when core.hooksPath changes",
+    "body": "When a repo's core.hooksPath differs from the default .git/hooks (e.g. when using .husky), a previously installed diwa hook could be left behind in the inactive location, causing stale or duplicate hook execution. The fix detects this mismatch and removes the diwa hook from the old location, ensuring only the active hooks path has the hook installed.",
+    "files": [
+     "src/install.rs"
+    ],
+    "tags": "git-hooks husky stale-state install"
+   },
+   {
+    "commit_sha": "2a52ad7d0fa5217cc538b42e42a02cc969c39da8",
+    "category": "decision",
+    "title": "Hook failures were undiagnosable because output was discarded to /dev/null",
+    "body": "The git hook originally redirected all output to /dev/null, making silent failures impossible to debug. Logging to ~/.diwa/hooks.log instead gives users a persistent record to diagnose issues without cluttering git command output.",
+    "files": [
+     "src/install.rs"
+    ],
+    "tags": "logging diagnostics hooks observability"
+   },
+   {
+    "commit_sha": "2a52ad7d0fa5217cc538b42e42a02cc969c39da8",
+    "category": "decision",
+    "title": "Hook install should overwrite existing hooks so updates propagate",
+    "body": "install_hook previously no-op'd if a hook already existed, which meant `diwa update` could never deliver hook script improvements (like the logging fix) to existing installs. Changing it to update the hook script on re-install ensures fixes and features reach users who already have diwa hooks installed.",
+    "files": [
+     "src/install.rs"
+    ],
+    "tags": "install update hooks propagation"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/diwa",
+  "sha": "232f4e831b7c91994cc73d239fef15837baacfb2",
+  "subject": "0.4.0: push-based indexing via daemon + queue, post-merge hooks",
+  "wall": 11.75249695777893,
+  "result": "```json\n[\n  {\n    \"commit_sha\": \"232f4e831b7c91994cc73d239fef15837baacfb2\",\n    \"category\": \"architecture\",\n    \"title\": \"Move indexing off the hot path with a daemon + queue model\",\n    \"body\": \"Git hooks previously triggered synchronous indexing, which risked high latency and missed events on fast-forward merges (e.g. 133 unindexed commits in katulong). The fix decouples hooks from indexing: hooks just drop flag files in ~/.diwa/queue/, and a launchd-managed background daemon watches the queue and indexes asynchronously. This keeps hook latency sub-10ms (no ORT load) and naturally debounces bursty activity like a git pull that lands many commits at once.\",\n    \"files\": [\"src/daemon.rs\", \"src/install.rs\", \"src/main.rs\"],\n    \"tags\": \"architecture daemon indexing hooks performance debounce\"\n  },\n  {\n    \"commit_sha\": \"232f4e831b7c91994cc73d239fef15837baacfb2\",\n    \"category\": \"bugfix\",\n    \"title\": \"Post-merge hooks were missing to catch fast-forward pulls\",\n    \"body\": \"Only certain git hooks were previously installed, so fast-forward merges (common with git pull) bypassed indexing entirely, silently causing a backlog of unindexed commits. Adding a post-merge hook closes this gap so all commit-introducing operations trigger the queue-based indexing pipeline.\",\n    \"files\": [\"src/install.rs\"],\n    \"tags\": \"bugfix git-hooks post-merge indexing\"\n  },\n  {\n    \"commit_sha\": \"232f4e831b7c91994cc73d239fef15837baacfb2\",\n    \"category\": \"migration\",\n    \"title\": \"Idempotent auto-migration via brew post_install to transition existing users\",\n    \"body\": \"Rather than requiring manual intervention, the Homebrew post_install hook runs `diwa migrate`, which rewrites hooks in every registered repo and loads the new daemon, without touching previously indexed data. Migration failures are logged but don't block install, since the next invocation of `diwa` can self-heal by auto-migrating again \u2014 favoring resilience over hard failure during upgrades.\",\n    \"files\": [\".github/workflows/release.yml\", \"src/migrate.rs\"],\n    \"tags\": \"migration homebrew upgrade idempotency resilience\"\n  }\n]\n```",
+  "in_tok": 2286,
+  "out_tok": 806,
+  "think_tok": 0,
+  "cost": 0.0172,
+  "api_ms": 10100,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "232f4e831b7c91994cc73d239fef15837baacfb2",
+    "category": "architecture",
+    "title": "Move indexing off the hot path with a daemon + queue model",
+    "body": "Git hooks previously triggered synchronous indexing, which risked high latency and missed events on fast-forward merges (e.g. 133 unindexed commits in katulong). The fix decouples hooks from indexing: hooks just drop flag files in ~/.diwa/queue/, and a launchd-managed background daemon watches the queue and indexes asynchronously. This keeps hook latency sub-10ms (no ORT load) and naturally debounces bursty activity like a git pull that lands many commits at once.",
+    "files": [
+     "src/daemon.rs",
+     "src/install.rs",
+     "src/main.rs"
+    ],
+    "tags": "architecture daemon indexing hooks performance debounce"
+   },
+   {
+    "commit_sha": "232f4e831b7c91994cc73d239fef15837baacfb2",
+    "category": "bugfix",
+    "title": "Post-merge hooks were missing to catch fast-forward pulls",
+    "body": "Only certain git hooks were previously installed, so fast-forward merges (common with git pull) bypassed indexing entirely, silently causing a backlog of unindexed commits. Adding a post-merge hook closes this gap so all commit-introducing operations trigger the queue-based indexing pipeline.",
+    "files": [
+     "src/install.rs"
+    ],
+    "tags": "bugfix git-hooks post-merge indexing"
+   },
+   {
+    "commit_sha": "232f4e831b7c91994cc73d239fef15837baacfb2",
+    "category": "migration",
+    "title": "Idempotent auto-migration via brew post_install to transition existing users",
+    "body": "Rather than requiring manual intervention, the Homebrew post_install hook runs `diwa migrate`, which rewrites hooks in every registered repo and loads the new daemon, without touching previously indexed data. Migration failures are logged but don't block install, since the next invocation of `diwa` can self-heal by auto-migrating again \u2014 favoring resilience over hard failure during upgrades.",
+    "files": [
+     ".github/workflows/release.yml",
+     "src/migrate.rs"
+    ],
+    "tags": "migration homebrew upgrade idempotency resilience"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/diwa",
+  "sha": "36fd5e764b991c4eecdede587ed88019485814a4",
+  "subject": "0.4.2: drop post_install, rely on auto-migrate + caveats",
+  "wall": 5.823694229125977,
+  "result": "[{\"commit_sha\":\"36fd5e764b991c4eecdede587ed88019485814a4\",\"category\":\"bugfix\",\"title\":\"Homebrew sandbox blocks post_install writes outside prefix\",\"body\":\"Brew's post_install runs sandboxed and cannot write outside the install prefix, but migration needs to write git hooks in user repos and a LaunchAgent plist in ~/Library/LaunchAgents. This caused 24 EPERM failures and a broken daemon install on every brew install/upgrade. The fix removes post_install entirely and relies on the existing auto_migrate_if_needed logic to run on the user's next diwa invocation, outside the sandbox, with a caveats message explaining the deferred migration.\",\"files\":[\".github/workflows/release.yml\",\"Cargo.lock\",\"Cargo.toml\"],\"tags\":\"homebrew sandbox migration post_install launchd packaging\"}]",
+  "in_tok": 2176,
+  "out_tok": 301,
+  "think_tok": 0,
+  "cost": 0.011710000000000002,
+  "api_ms": 4008,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "36fd5e764b991c4eecdede587ed88019485814a4",
+    "category": "bugfix",
+    "title": "Homebrew sandbox blocks post_install writes outside prefix",
+    "body": "Brew's post_install runs sandboxed and cannot write outside the install prefix, but migration needs to write git hooks in user repos and a LaunchAgent plist in ~/Library/LaunchAgents. This caused 24 EPERM failures and a broken daemon install on every brew install/upgrade. The fix removes post_install entirely and relies on the existing auto_migrate_if_needed logic to run on the user's next diwa invocation, outside the sandbox, with a caveats message explaining the deferred migration.",
+    "files": [
+     ".github/workflows/release.yml",
+     "Cargo.lock",
+     "Cargo.toml"
+    ],
+    "tags": "homebrew sandbox migration post_install launchd packaging"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/tunnels",
+  "sha": "a90e340d118b2b78216109ee03c189c23f0103f4",
+  "subject": "drop sudo: use ~/Library/LaunchAgents instead of /Library/LaunchDaemons",
+  "wall": 8.881521940231323,
+  "result": "[{\"commit_sha\":\"a90e340d118b2b78216109ee03c189c23f0103f4\",\"category\":\"decision\",\"title\":\"Move launchd plists from system-level LaunchDaemons to user-level LaunchAgents to avoid sudo\",\"body\":\"Using /Library/LaunchDaemons requires root privileges for every install/uninstall operation, which is a poor UX for a CLI tool and risks accidental system-wide side effects. Switching to ~/Library/LaunchAgents and a user-owned log directory (~/Library/Logs/tunnels) allows the tool to manage services entirely within the user's permission scope. This trades system-boot-time daemon behavior for simpler, sudo-free installation at the cost of the service only running while the user is logged in.\",\"files\":[\"src/launchd.rs\"],\"tags\":\"launchd macos permissions sudo architecture cli\"}]",
+  "in_tok": 2218,
+  "out_tok": 290,
+  "think_tok": 0,
+  "cost": 0.0033472,
+  "api_ms": 7133,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "a90e340d118b2b78216109ee03c189c23f0103f4",
+    "category": "decision",
+    "title": "Move launchd plists from system-level LaunchDaemons to user-level LaunchAgents to avoid sudo",
+    "body": "Using /Library/LaunchDaemons requires root privileges for every install/uninstall operation, which is a poor UX for a CLI tool and risks accidental system-wide side effects. Switching to ~/Library/LaunchAgents and a user-owned log directory (~/Library/Logs/tunnels) allows the tool to manage services entirely within the user's permission scope. This trades system-boot-time daemon behavior for simpler, sudo-free installation at the cost of the service only running while the user is logged in.",
+    "files": [
+     "src/launchd.rs"
+    ],
+    "tags": "launchd macos permissions sudo architecture cli"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/tunnels",
+  "sha": "9fcedbb3a3cdc326f99ae6bdcf8e49bf3c089e3b",
+  "subject": "import + migrate: auto-offer to move daemon plists to user-level LaunchAgents",
+  "wall": 6.084550857543945,
+  "result": "[{\"commit_sha\":\"9fcedbb3a3cdc326f99ae6bdcf8e49bf3c089e3b\",\"category\":\"architecture\",\"title\":\"Offer migration from system-level to user-level LaunchAgents during import\",\"body\":\"When importing existing daemon tunnels, the app now detects plists installed as system-level LaunchDaemons and offers to migrate them to user-level LaunchAgents via a new Migrating app mode. This avoids requiring elevated privileges for daemon management and keeps imported tunnels consistent with the app's user-space daemon model. The discover_existing function was extended to report daemon status and plist path per tunnel so the UI can prompt per-item.\",\"files\":[\"src/app.rs\",\"src/launchd.rs\",\"src/main.rs\",\"src/ui.rs\"],\"tags\":\"launchd macos migration daemon import ui\"}]",
+  "in_tok": 2152,
+  "out_tok": 283,
+  "think_tok": 0,
+  "cost": 0.011434,
+  "api_ms": 4229,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "9fcedbb3a3cdc326f99ae6bdcf8e49bf3c089e3b",
+    "category": "architecture",
+    "title": "Offer migration from system-level to user-level LaunchAgents during import",
+    "body": "When importing existing daemon tunnels, the app now detects plists installed as system-level LaunchDaemons and offers to migrate them to user-level LaunchAgents via a new Migrating app mode. This avoids requiring elevated privileges for daemon management and keeps imported tunnels consistent with the app's user-space daemon model. The discover_existing function was extended to report daemon status and plist path per tunnel so the UI can prompt per-item.",
+    "files": [
+     "src/app.rs",
+     "src/launchd.rs",
+     "src/main.rs",
+     "src/ui.rs"
+    ],
+    "tags": "launchd macos migration daemon import ui"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/tunnels",
+  "sha": "c47c5cabef2c4128f04f2ed81e95eb3002c80db2",
+  "subject": "Add Services tab with port scanning and Cloudflare API integration",
+  "wall": 8.648956298828125,
+  "result": "[{\"commit_sha\":\"c47c5cabef2c4128f04f2ed81e95eb3002c80db2\",\"category\":\"architecture\",\"title\":\"Services tab discovers local ports and cross-references them with Cloudflare ingress rules\",\"body\":\"Added a new Services tab that uses lsof to enumerate listening TCP ports and resolves project names from each process's working directory, giving visibility into what's actually running locally. This is cross-referenced against Cloudflare tunnel ingress rules (fetched via the CF REST API using cert.pem credentials) so the UI can show whether a local service is exposed publicly and what its tunnel URL is. This closes the gap between 'what's running' and 'what's tunneled', which previously required manual correlation.\",\"files\":[\"src/scan.rs\",\"src/cloudflare.rs\",\"src/app.rs\",\"src/ui.rs\",\"src/config.rs\"],\"tags\":[\"tui\",\"cloudflare\",\"port-scanning\",\"lsof\",\"architecture\",\"rust\"]},{\"commit_sha\":\"c47c5cabef2c4128f04f2ed81e95eb3002c80db2\",\"category\":\"decision\",\"title\":\"Removed unused tokio dependency to keep the CLI lightweight\",\"body\":\"The tokio async runtime was present in Cargo.toml but unused, likely a leftover from an earlier design iteration. Since the CF API calls and lsof scanning are handled synchronously/via CLI shelling rather than async I/O, tokio added unnecessary build weight and was dropped.\",\"files\":[\"Cargo.toml\",\"Cargo.lock\"],\"tags\":[\"dependencies\",\"cleanup\",\"rust\"]}]",
+  "in_tok": 2254,
+  "out_tok": 532,
+  "think_tok": 0,
+  "cost": 0.014332000000000001,
+  "api_ms": 6967,
+  "is_error": false,
+  "parsed": null,
+  "parse_error": "could not parse JSON array (diwa parser would fail)",
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/tunnels",
+  "sha": "83c27346030f935943f27a9be9d2e3b0e75b2f03",
+  "subject": "Multi-account CF ingress: fetch routes for all accounts in config",
+  "wall": 8.12530779838562,
+  "result": "```json\n[\n  {\n    \"commit_sha\": \"83c27346030f935943f27a9be9d2e3b0e75b2f03\",\n    \"category\": \"architecture\",\n    \"title\": \"Support multi-account Cloudflare setups by deriving account IDs from tunnel tokens\",\n    \"body\": \"The original sync logic assumed a single Cloudflare account and relied on `cloudflared tunnel list` plus one set of API credentials, which failed to discover tunnels belonging to other accounts. The fix decodes each tunnel's base64 token to extract its account_id, then performs per-account API calls using whichever credential (cert.pem or configured API token) works for that account. This generalizes the tool to work correctly across users/orgs with tunnels spread over multiple Cloudflare accounts.\",\n    \"files\": [\"src/cloudflare.rs\", \"Cargo.toml\"],\n    \"tags\": \"cloudflare multi-account authentication ingress architecture\"\n  }\n]\n```",
+  "in_tok": 2188,
+  "out_tok": 320,
+  "think_tok": 0,
+  "cost": 0.011948,
+  "api_ms": 6235,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "83c27346030f935943f27a9be9d2e3b0e75b2f03",
+    "category": "architecture",
+    "title": "Support multi-account Cloudflare setups by deriving account IDs from tunnel tokens",
+    "body": "The original sync logic assumed a single Cloudflare account and relied on `cloudflared tunnel list` plus one set of API credentials, which failed to discover tunnels belonging to other accounts. The fix decodes each tunnel's base64 token to extract its account_id, then performs per-account API calls using whichever credential (cert.pem or configured API token) works for that account. This generalizes the tool to work correctly across users/orgs with tunnels spread over multiple Cloudflare accounts.",
+    "files": [
+     "src/cloudflare.rs",
+     "Cargo.toml"
+    ],
+    "tags": "cloudflare multi-account authentication ingress architecture"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/tunnels",
+  "sha": "3975b3e90dc4ca8134549a0fa322f98bb03309a4",
+  "subject": "v0.7.0: route management, memo field, sub-menus, tab reorder",
+  "wall": 10.524570941925049,
+  "result": "[\n{\n\"commit_sha\": \"3975b3e90dc4ca8134549a0fa322f98bb03309a4\",\n\"category\": \"decision\",\n\"title\": \"Services became the primary tab, Tunnels secondary\",\n\"body\": \"The default tab order was swapped so Services is now tab 1 and Tunnels is tab 2, reflecting that day-to-day usage centers on managing local services rather than tunnel infrastructure itself. This was paired with a two-level keybinding bar (primary + `.`-triggered secondary actions) to keep the UI from becoming cluttered as route management and memo features were added.\",\n\"files\": [\"src/app.rs\", \"src/ui.rs\"],\n\"tags\": \"ux tui keybindings tabs\"\n},\n{\n\"commit_sha\": \"3975b3e90dc4ca8134549a0fa322f98bb03309a4\",\n\"category\": \"architecture\",\n\"title\": \"Per-tunnel API tokens enable self-service DNS route management\",\n\"body\": \"cloudflare.rs was extended to support per-tunnel API tokens in addition to multi-account tokens, allowing route add/remove and DNS record management to be scoped and idempotent. This lets both the CLI (`tunnels route add/rm`) and TUI (`m` to manage subdomains) share the same underlying route logic without requiring broader account-level credentials.\",\n\"files\": [\"src/cloudflare.rs\", \"src/main.rs\", \"src/app.rs\"],\n\"tags\": \"cloudflare dns api-tokens architecture\"\n},\n{\n\"commit_sha\": \"3975b3e90dc4ca8134549a0fa322f98bb03309a4\",\n\"category\": \"decision\",\n\"title\": \"Replaced rigid machine field with freeform memo on services\",\n\"body\": \"The services schema dropped the dedicated 'machine' field in favor of an optional freeform 'memo', giving users flexibility to annotate services with whatever context matters (machine name, purpose, notes) instead of a single fixed-purpose field.\",\n\"files\": [\"src/config.rs\"],\n\"tags\": \"schema config services\"\n}\n]",
+  "in_tok": 2298,
+  "out_tok": 685,
+  "think_tok": 0,
+  "cost": 0.016037999999999997,
+  "api_ms": 8383,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "3975b3e90dc4ca8134549a0fa322f98bb03309a4",
+    "category": "decision",
+    "title": "Services became the primary tab, Tunnels secondary",
+    "body": "The default tab order was swapped so Services is now tab 1 and Tunnels is tab 2, reflecting that day-to-day usage centers on managing local services rather than tunnel infrastructure itself. This was paired with a two-level keybinding bar (primary + `.`-triggered secondary actions) to keep the UI from becoming cluttered as route management and memo features were added.",
+    "files": [
+     "src/app.rs",
+     "src/ui.rs"
+    ],
+    "tags": "ux tui keybindings tabs"
+   },
+   {
+    "commit_sha": "3975b3e90dc4ca8134549a0fa322f98bb03309a4",
+    "category": "architecture",
+    "title": "Per-tunnel API tokens enable self-service DNS route management",
+    "body": "cloudflare.rs was extended to support per-tunnel API tokens in addition to multi-account tokens, allowing route add/remove and DNS record management to be scoped and idempotent. This lets both the CLI (`tunnels route add/rm`) and TUI (`m` to manage subdomains) share the same underlying route logic without requiring broader account-level credentials.",
+    "files": [
+     "src/cloudflare.rs",
+     "src/main.rs",
+     "src/app.rs"
+    ],
+    "tags": "cloudflare dns api-tokens architecture"
+   },
+   {
+    "commit_sha": "3975b3e90dc4ca8134549a0fa322f98bb03309a4",
+    "category": "decision",
+    "title": "Replaced rigid machine field with freeform memo on services",
+    "body": "The services schema dropped the dedicated 'machine' field in favor of an optional freeform 'memo', giving users flexibility to annotate services with whatever context matters (machine name, purpose, notes) instead of a single fixed-purpose field.",
+    "files": [
+     "src/config.rs"
+    ],
+    "tags": "schema config services"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/tunnels",
+  "sha": "259ef83a3428df890cd08585ce4a41ce1bb27f7f",
+  "subject": "v0.8.0: background loading spinner, service subdomain rename, protocol-aware URLs",
+  "wall": 11.649229049682617,
+  "result": "[\n{\"commit_sha\":\"259ef83a3428df890cd08585ce4a41ce1bb27f7f\",\"category\":\"pattern\",\"title\":\"Move blocking Cloudflare API calls off the UI thread using mpsc channels\",\"body\":\"Direct synchronous CF API calls were blocking the TUI, so all network operations (sync, route management, token verification) were moved to background threads communicating via mpsc channels. The TUI now renders instantly from local cached data while CF syncs asynchronously, with input blocked during loading to prevent duplicate triggers. This establishes a BgResult enum pattern for routing async results back into app state.\",\"files\":[\"src/app.rs\",\"src/cloudflare.rs\",\"src/main.rs\"],\"tags\":\"async concurrency tui mpsc background-threads architecture\"},\n{\"commit_sha\":\"259ef83a3428df890cd08585ce4a41ce1bb27f7f\",\"category\":\"decision\",\"title\":\"Lock domain suffix when renaming service subdomains\",\"body\":\"The new `m` rename keybinding on the Services tab only allows editing the subdomain prefix, keeping the domain suffix locked. This prevents accidental cross-domain renames and keeps the UX scoped to the common use case of just changing the service name.\",\"files\":[\"src/app.rs\",\"src/ui.rs\"],\"tags\":\"ux services rename decision\"},\n{\"commit_sha\":\"259ef83a3428df890cd08585ce4a41ce1bb27f7f\",\"category\":\"bugfix\",\"title\":\"Service URLs hardcoded https:// regardless of tunnel protocol\",\"body\":\"Non-HTTP tunnel services (ssh, tcp, rdp) were displayed with a hardcoded https:// prefix, which was misleading since those protocols aren't web-based. The fix makes the Services tab protocol-aware, deriving the correct URL scheme from the tunnel's actual protocol configuration.\",\"files\":[\"src/ui.rs\",\"src/cloudflare.rs\"],\"tags\":\"bugfix protocol ui services\"}\n]",
+  "in_tok": 2468,
+  "out_tok": 669,
+  "think_tok": 0,
+  "cost": 0.016558,
+  "api_ms": 9897,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "259ef83a3428df890cd08585ce4a41ce1bb27f7f",
+    "category": "pattern",
+    "title": "Move blocking Cloudflare API calls off the UI thread using mpsc channels",
+    "body": "Direct synchronous CF API calls were blocking the TUI, so all network operations (sync, route management, token verification) were moved to background threads communicating via mpsc channels. The TUI now renders instantly from local cached data while CF syncs asynchronously, with input blocked during loading to prevent duplicate triggers. This establishes a BgResult enum pattern for routing async results back into app state.",
+    "files": [
+     "src/app.rs",
+     "src/cloudflare.rs",
+     "src/main.rs"
+    ],
+    "tags": "async concurrency tui mpsc background-threads architecture"
+   },
+   {
+    "commit_sha": "259ef83a3428df890cd08585ce4a41ce1bb27f7f",
+    "category": "decision",
+    "title": "Lock domain suffix when renaming service subdomains",
+    "body": "The new `m` rename keybinding on the Services tab only allows editing the subdomain prefix, keeping the domain suffix locked. This prevents accidental cross-domain renames and keeps the UX scoped to the common use case of just changing the service name.",
+    "files": [
+     "src/app.rs",
+     "src/ui.rs"
+    ],
+    "tags": "ux services rename decision"
+   },
+   {
+    "commit_sha": "259ef83a3428df890cd08585ce4a41ce1bb27f7f",
+    "category": "bugfix",
+    "title": "Service URLs hardcoded https:// regardless of tunnel protocol",
+    "body": "Non-HTTP tunnel services (ssh, tcp, rdp) were displayed with a hardcoded https:// prefix, which was misleading since those protocols aren't web-based. The fix makes the Services tab protocol-aware, deriving the correct URL scheme from the tunnel's actual protocol configuration.",
+    "files": [
+     "src/ui.rs",
+     "src/cloudflare.rs"
+    ],
+    "tags": "bugfix protocol ui services"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/tunnels",
+  "sha": "c47fa5e6b070c9248f306a27c31e2200120c8abf",
+  "subject": "feat: tunnels heal command (#1)",
+  "wall": 13.996733903884888,
+  "result": "```json\n[\n  {\n    \"commit_sha\": \"c47fa5e6b070c9248f306a27c31e2200120c8abf\",\n    \"category\": \"bugfix\",\n    \"title\": \"launchd KeepAlive with SuccessfulExit=false silently prevented tunnel restarts\",\n    \"body\": \"Tunnels shut down via SIGTERM exit with code 0, which launchd's conditional KeepAlive treated as a 'successful exit' and therefore did not restart. Switching to unconditional KeepAlive=true ensures cloudflared is always relaunched after any exit, graceful or not. This was discovered while building the heal command, which needed to recover from exactly this stuck state.\",\n    \"files\": [\"src/launchd.rs\"],\n    \"tags\": \"launchd keepalive cloudflared process-management bugfix\"\n  },\n  {\n    \"commit_sha\": \"c47fa5e6b070c9248f306a27c31e2200120c8abf\",\n    \"category\": \"architecture\",\n    \"title\": \"Replace fragile string-sentinel connection status with explicit connection_count field\",\n    \"body\": \"TunnelInfo previously encoded connection health via a string that started with 'no ' (e.g. 'no edge'), which was brittle and duplicated parsing logic across app.rs and main.rs. Adding a structured connection_count: usize field makes health checks explicit and removes string-matching bugs when CF API wording changes. This also unified heal/sync status display around one source of truth.\",\n    \"files\": [\"src/cloudflare.rs\", \"src/app.rs\", \"src/main.rs\"],\n    \"tags\": \"refactor data-modeling api-parsing tunnel-status\"\n  },\n  {\n    \"commit_sha\": \"c47fa5e6b070c9248f306a27c31e2200120c8abf\",\n    \"category\": \"decision\",\n    \"title\": \"Heal command must fail safe toward 'healthy' when CF API data is missing or unreachable\",\n    \"body\": \"To avoid false-positive restarts from flaky Cloudflare API responses, heal bails out entirely if tunnel_info is empty, skips accounts it couldn't reach, and defaults to 'healthy' (unwrap_or(true)) rather than 'unhealthy' when data is absent. Additionally, heal only targets tunnels with an active PID or ones loaded-but-not-running, since those are the states where restarting is safe and necessary. This design favors avoiding unnecessary restarts over aggressive recovery.\",\n    \"files\": [\"src/main.rs\"],\n    \"tags\": \"heal reliability failure-modes cloudflare-api scheduling\"\n  }\n]\n```",
+  "in_tok": 2460,
+  "out_tok": 865,
+  "think_tok": 0,
+  "cost": 0.018486000000000002,
+  "api_ms": 12251,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "c47fa5e6b070c9248f306a27c31e2200120c8abf",
+    "category": "bugfix",
+    "title": "launchd KeepAlive with SuccessfulExit=false silently prevented tunnel restarts",
+    "body": "Tunnels shut down via SIGTERM exit with code 0, which launchd's conditional KeepAlive treated as a 'successful exit' and therefore did not restart. Switching to unconditional KeepAlive=true ensures cloudflared is always relaunched after any exit, graceful or not. This was discovered while building the heal command, which needed to recover from exactly this stuck state.",
+    "files": [
+     "src/launchd.rs"
+    ],
+    "tags": "launchd keepalive cloudflared process-management bugfix"
+   },
+   {
+    "commit_sha": "c47fa5e6b070c9248f306a27c31e2200120c8abf",
+    "category": "architecture",
+    "title": "Replace fragile string-sentinel connection status with explicit connection_count field",
+    "body": "TunnelInfo previously encoded connection health via a string that started with 'no ' (e.g. 'no edge'), which was brittle and duplicated parsing logic across app.rs and main.rs. Adding a structured connection_count: usize field makes health checks explicit and removes string-matching bugs when CF API wording changes. This also unified heal/sync status display around one source of truth.",
+    "files": [
+     "src/cloudflare.rs",
+     "src/app.rs",
+     "src/main.rs"
+    ],
+    "tags": "refactor data-modeling api-parsing tunnel-status"
+   },
+   {
+    "commit_sha": "c47fa5e6b070c9248f306a27c31e2200120c8abf",
+    "category": "decision",
+    "title": "Heal command must fail safe toward 'healthy' when CF API data is missing or unreachable",
+    "body": "To avoid false-positive restarts from flaky Cloudflare API responses, heal bails out entirely if tunnel_info is empty, skips accounts it couldn't reach, and defaults to 'healthy' (unwrap_or(true)) rather than 'unhealthy' when data is absent. Additionally, heal only targets tunnels with an active PID or ones loaded-but-not-running, since those are the states where restarting is safe and necessary. This design favors avoiding unnecessary restarts over aggressive recovery.",
+    "files": [
+     "src/main.rs"
+    ],
+    "tags": "heal reliability failure-modes cloudflare-api scheduling"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/tunnels",
+  "sha": "2733306c4427eb1a11b796f965590eeadb698875",
+  "subject": "feat: unified tree view with prefix keys and context menu",
+  "wall": 7.415292263031006,
+  "result": "```json\n[\n  {\n    \"commit_sha\": \"2733306c4427eb1a11b796f965590eeadb698875\",\n    \"category\": \"architecture\",\n    \"title\": \"Merge Services/Tunnels tabs into a single unified tree view\",\n    \"body\": \"The two-tab layout required users to switch context to see how tunnels and services related to each other. Replacing it with a tree view where tunnels are parent rows and services are nested children makes the relationship explicit and removes the need for tab switching. This also set up discoverable prefix keys (a/t/g) and an Enter-triggered context menu to replace a hidden submenu toggle, improving keybinding discoverability.\",\n    \"files\": [\"src/app.rs\", \"src/ui.rs\", \"src/main.rs\", \"src/config.rs\", \"src/cloudflare.rs\", \"CLAUDE.md\"],\n    \"tags\": \"tui ratatui ux architecture tree-view keybindings\"\n  }\n]\n```",
+  "in_tok": 2222,
+  "out_tok": 314,
+  "think_tok": 0,
+  "cost": 0.012024,
+  "api_ms": 5689,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "2733306c4427eb1a11b796f965590eeadb698875",
+    "category": "architecture",
+    "title": "Merge Services/Tunnels tabs into a single unified tree view",
+    "body": "The two-tab layout required users to switch context to see how tunnels and services related to each other. Replacing it with a tree view where tunnels are parent rows and services are nested children makes the relationship explicit and removes the need for tab switching. This also set up discoverable prefix keys (a/t/g) and an Enter-triggered context menu to replace a hidden submenu toggle, improving keybinding discoverability.",
+    "files": [
+     "src/app.rs",
+     "src/ui.rs",
+     "src/main.rs",
+     "src/config.rs",
+     "src/cloudflare.rs",
+     "CLAUDE.md"
+    ],
+    "tags": "tui ratatui ux architecture tree-view keybindings"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/tunnels",
+  "sha": "dfdac325f93fb9725535cf73a4e2fe12c5512bbd",
+  "subject": "refactor: review cleanup \u2014 dedup helpers, fix dead code, fix multi-account bug",
+  "wall": 10.620874881744385,
+  "result": "[{\"commit_sha\":\"dfdac325f93fb9725535cf73a4e2fe12c5512bbd\",\"category\":\"bugfix\",\"title\":\"Multi-account API token matching always resolved to the first token\",\"body\":\"Token lookup logic didn't properly scope to the selected account, causing the API token display to always show the first configured token regardless of which account was active. Fixed by introducing `owned_api_tokens` on Config to correctly filter tokens per-account. This highlights a risk pattern: ad-hoc inline lookups across multi-account data structures are error-prone and should be centralized in helper methods.\",\"files\":[\"src/config.rs\",\"src/app.rs\"],\"tags\":\"bugfix multi-account config tokens\"},{\"commit_sha\":\"dfdac325f93fb9725535cf73a4e2fe12c5512bbd\",\"category\":\"pattern\",\"title\":\"Deduplicate repeated match-arm and lookup logic via extracted helpers\",\"body\":\"Several code review passes revealed duplicated logic scattered across app.rs and ui.rs: identical match arms for LinkComplete/UnlinkComplete, repeated return-to-settings handling, and inline tunnel-by-id resolution. These were consolidated into shared helpers (`find_tunnel_by_tunnel_id`, `dismiss_or_settings`, `format_input_display`) to reduce maintenance burden and the chance of divergent bugs when one copy is updated but not the other.\",\"files\":[\"src/app.rs\",\"src/ui.rs\",\"src/main.rs\"],\"tags\":\"refactor dedup maintainability pattern\"},{\"commit_sha\":\"dfdac325f93fb9725535cf73a4e2fe12c5512bbd\",\"category\":\"learning\",\"title\":\"Dead code and unused fields accumulate silently without regular cleanup passes\",\"body\":\"Removal of `split_hostname`, `resolve_service_route_by_name`, an unused `name` field on `Mode::Linking`, and an unused variable warning shows that dead code crept in over time as features evolved. Periodic review-driven cleanup commits are useful for catching these before they obscure actual logic or hide real bugs like the multi-account token issue fixed in the same commit.\",\"files\":[\"src/app.rs\"],\"tags\":\"cleanup dead-code code-review learning\"}]",
+  "in_tok": 2317,
+  "out_tok": 755,
+  "think_tok": 0,
+  "cost": 0.016814,
+  "api_ms": 8909,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "dfdac325f93fb9725535cf73a4e2fe12c5512bbd",
+    "category": "bugfix",
+    "title": "Multi-account API token matching always resolved to the first token",
+    "body": "Token lookup logic didn't properly scope to the selected account, causing the API token display to always show the first configured token regardless of which account was active. Fixed by introducing `owned_api_tokens` on Config to correctly filter tokens per-account. This highlights a risk pattern: ad-hoc inline lookups across multi-account data structures are error-prone and should be centralized in helper methods.",
+    "files": [
+     "src/config.rs",
+     "src/app.rs"
+    ],
+    "tags": "bugfix multi-account config tokens"
+   },
+   {
+    "commit_sha": "dfdac325f93fb9725535cf73a4e2fe12c5512bbd",
+    "category": "pattern",
+    "title": "Deduplicate repeated match-arm and lookup logic via extracted helpers",
+    "body": "Several code review passes revealed duplicated logic scattered across app.rs and ui.rs: identical match arms for LinkComplete/UnlinkComplete, repeated return-to-settings handling, and inline tunnel-by-id resolution. These were consolidated into shared helpers (`find_tunnel_by_tunnel_id`, `dismiss_or_settings`, `format_input_display`) to reduce maintenance burden and the chance of divergent bugs when one copy is updated but not the other.",
+    "files": [
+     "src/app.rs",
+     "src/ui.rs",
+     "src/main.rs"
+    ],
+    "tags": "refactor dedup maintainability pattern"
+   },
+   {
+    "commit_sha": "dfdac325f93fb9725535cf73a4e2fe12c5512bbd",
+    "category": "learning",
+    "title": "Dead code and unused fields accumulate silently without regular cleanup passes",
+    "body": "Removal of `split_hostname`, `resolve_service_route_by_name`, an unused `name` field on `Mode::Linking`, and an unused variable warning shows that dead code crept in over time as features evolved. Periodic review-driven cleanup commits are useful for catching these before they obscure actual logic or hide real bugs like the multi-account token issue fixed in the same commit.",
+    "files": [
+     "src/app.rs"
+    ],
+    "tags": "cleanup dead-code code-review learning"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/tunnels",
+  "sha": "06354beb2dd887b64ee4302839364385b379e28d",
+  "subject": "fix restart not picking up updated tokens, improve token edit UX",
+  "wall": 8.300343036651611,
+  "result": "```json\n[\n  {\n    \"commit_sha\": \"06354beb2dd887b64ee4302839364385b379e28d\",\n    \"category\": \"bugfix\",\n    \"title\": \"launchctl kickstart -k ignores plist changes; need full bootout+bootstrap\",\n    \"body\": \"restart() used `launchctl kickstart -k`, which kills and restarts the cached service definition but does not reload the plist file, so updated tunnel tokens were silently ignored after a restart. The fix switches to a full stop + start cycle (bootout followed by bootstrap) to force launchd to reload the plist. This is a useful learning: kickstart is only safe for in-place process restarts, not for applying configuration changes.\",\n    \"files\": [\"src/launchd.rs\"],\n    \"tags\": \"launchd macos restart plist bugfix token\"\n  },\n  {\n    \"commit_sha\": \"06354beb2dd887b64ee4302839364385b379e28d\",\n    \"category\": \"decision\",\n    \"title\": \"Allow bare token argument for single-tunnel token edit UX\",\n    \"body\": \"When only one tunnel is configured, requiring the `--token` flag for `tunnels token edit` was unnecessary friction. The CLI now accepts a bare token argument and resolves it to the sole configured tunnel, falling back to explicit name/flag handling when multiple tunnels exist. Tests were added to confirm updates succeed by name and fail cleanly for nonexistent tunnel names.\",\n    \"files\": [\"src/config.rs\", \"src/main.rs\"],\n    \"tags\": \"cli ux config token\"\n  }\n]\n```",
+  "in_tok": 2169,
+  "out_tok": 526,
+  "think_tok": 0,
+  "cost": 0.013932,
+  "api_ms": 6558,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "06354beb2dd887b64ee4302839364385b379e28d",
+    "category": "bugfix",
+    "title": "launchctl kickstart -k ignores plist changes; need full bootout+bootstrap",
+    "body": "restart() used `launchctl kickstart -k`, which kills and restarts the cached service definition but does not reload the plist file, so updated tunnel tokens were silently ignored after a restart. The fix switches to a full stop + start cycle (bootout followed by bootstrap) to force launchd to reload the plist. This is a useful learning: kickstart is only safe for in-place process restarts, not for applying configuration changes.",
+    "files": [
+     "src/launchd.rs"
+    ],
+    "tags": "launchd macos restart plist bugfix token"
+   },
+   {
+    "commit_sha": "06354beb2dd887b64ee4302839364385b379e28d",
+    "category": "decision",
+    "title": "Allow bare token argument for single-tunnel token edit UX",
+    "body": "When only one tunnel is configured, requiring the `--token` flag for `tunnels token edit` was unnecessary friction. The CLI now accepts a bare token argument and resolves it to the sole configured tunnel, falling back to explicit name/flag handling when multiple tunnels exist. Tests were added to confirm updates succeed by name and fail cleanly for nonexistent tunnel names.",
+    "files": [
+     "src/config.rs",
+     "src/main.rs"
+    ],
+    "tags": "cli ux config token"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/tunnels",
+  "sha": "0a09e2d08d742a4ff8e09e3b1194bd50243b9c2f",
+  "subject": "add route import from stdin JSON, bump to 0.9.3 (#9)",
+  "wall": 8.105931758880615,
+  "result": "[{\"commit_sha\":\"0a09e2d08d742a4ff8e09e3b1194bd50243b9c2f\",\"category\":\"architecture\",\"title\":\"Cross-tunnel route migration via stdin JSON pipe\",\"body\":\"To support moving routes between tunnels, the design reused the existing `tunnels routes --json` output format as the input format for a new `route import` subcommand, enabling Unix-style piping between instances of the tool. Logic was deliberately isolated into a pure parse/retarget/group module (route_import.rs) separate from CLI wiring, making it independently unit-testable without touching Cloudflare APIs. The existing plist-based `tunnels import` command was left untouched to avoid naming/behavior collisions.\",\"files\":[\"src/route_import.rs\",\"src/main.rs\",\"CLAUDE.md\"],\"tags\":\"cli architecture route-import idempotency unix-pipe testing\"}]",
+  "in_tok": 2373,
+  "out_tok": 299,
+  "think_tok": 0,
+  "cost": 0.012478,
+  "api_ms": 6361,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "0a09e2d08d742a4ff8e09e3b1194bd50243b9c2f",
+    "category": "architecture",
+    "title": "Cross-tunnel route migration via stdin JSON pipe",
+    "body": "To support moving routes between tunnels, the design reused the existing `tunnels routes --json` output format as the input format for a new `route import` subcommand, enabling Unix-style piping between instances of the tool. Logic was deliberately isolated into a pure parse/retarget/group module (route_import.rs) separate from CLI wiring, making it independently unit-testable without touching Cloudflare APIs. The existing plist-based `tunnels import` command was left untouched to avoid naming/behavior collisions.",
+    "files": [
+     "src/route_import.rs",
+     "src/main.rs",
+     "CLAUDE.md"
+    ],
+    "tags": "cli architecture route-import idempotency unix-pipe testing"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ },
+ {
+  "repo": "Dorky-Robot/tunnels",
+  "sha": "5f4b49493d5b4635fcb5eb0c3e93b6b8c6f25282",
+  "subject": "v0.10.1: actually include the launchd Intel-mac + stop-reap fix",
+  "wall": 12.74282693862915,
+  "result": "```json\n[\n  {\n    \"commit_sha\": \"5f4b49493d5b4635fcb5eb0c3e93b6b8c6f25282\",\n    \"category\": \"bugfix\",\n    \"title\": \"Release process can silently drop uncommitted fixes during bulk-copy ports\",\n    \"body\": \"v0.10.0 was meant to port launchd.rs fixes from main but the bulk-copy only grabbed main's committed state, missing a fix that was still unstaged in main's working tree. This highlights a gap in the release/porting workflow: cross-branch copies must verify the actual intended diff, not just the committed version of a file, especially when work-in-progress exists uncommitted on the source branch.\",\n    \"files\": [\"src/launchd.rs\"],\n    \"tags\": \"release-process git-workflow regression launchd\"\n  },\n  {\n    \"commit_sha\": \"5f4b49493d5b4635fcb5eb0c3e93b6b8c6f25282\",\n    \"category\": \"bugfix\",\n    \"title\": \"Hardcoded Homebrew path broke cloudflared launch on Intel Macs\",\n    \"body\": \"cloudflared's install path differs by architecture (/opt/homebrew on Apple Silicon vs /usr/local on Intel), but launchd.rs hardcoded the Apple Silicon path, causing a silent exit-78 on Intel machines. The fix introduces cloudflared_path(), resolved at plist-write time with a fallback chain: explicit env override, /opt/homebrew, /usr/local, which (PATH lookup), then a legacy default to preserve prior behavior when cloudflared isn't found.\",\n    \"files\": [\"src/launchd.rs\"],\n    \"tags\": \"launchd cloudflared macos intel-mac path-resolution\"\n  },\n  {\n    \"commit_sha\": \"5f4b49493d5b4635fcb5eb0c3e93b6b8c6f25282\",\n    \"category\": \"bugfix\",\n    \"title\": \"stop() could report 'stopped' while cloudflared was still alive holding the secret\",\n    \"body\": \"Unloading the launchd job didn't guarantee the child process actually exited, risking a race where callers believed the tunnel was stopped but cloudflared still held the secret/socket. The fix snapshots the PID before unload, polls for up to 3 seconds for the child to exit, and SIGKILLs as a last resort to guarantee termination before reporting success.\",\n    \"files\": [\"src/launchd.rs\"],\n    \"tags\": \"launchd process-management race-condition shutdown\"\n  }\n]\n```",
+  "in_tok": 2521,
+  "out_tok": 843,
+  "think_tok": 0,
+  "cost": 0.01851,
+  "api_ms": 10979,
+  "is_error": false,
+  "parsed": [
+   {
+    "commit_sha": "5f4b49493d5b4635fcb5eb0c3e93b6b8c6f25282",
+    "category": "bugfix",
+    "title": "Release process can silently drop uncommitted fixes during bulk-copy ports",
+    "body": "v0.10.0 was meant to port launchd.rs fixes from main but the bulk-copy only grabbed main's committed state, missing a fix that was still unstaged in main's working tree. This highlights a gap in the release/porting workflow: cross-branch copies must verify the actual intended diff, not just the committed version of a file, especially when work-in-progress exists uncommitted on the source branch.",
+    "files": [
+     "src/launchd.rs"
+    ],
+    "tags": "release-process git-workflow regression launchd"
+   },
+   {
+    "commit_sha": "5f4b49493d5b4635fcb5eb0c3e93b6b8c6f25282",
+    "category": "bugfix",
+    "title": "Hardcoded Homebrew path broke cloudflared launch on Intel Macs",
+    "body": "cloudflared's install path differs by architecture (/opt/homebrew on Apple Silicon vs /usr/local on Intel), but launchd.rs hardcoded the Apple Silicon path, causing a silent exit-78 on Intel machines. The fix introduces cloudflared_path(), resolved at plist-write time with a fallback chain: explicit env override, /opt/homebrew, /usr/local, which (PATH lookup), then a legacy default to preserve prior behavior when cloudflared isn't found.",
+    "files": [
+     "src/launchd.rs"
+    ],
+    "tags": "launchd cloudflared macos intel-mac path-resolution"
+   },
+   {
+    "commit_sha": "5f4b49493d5b4635fcb5eb0c3e93b6b8c6f25282",
+    "category": "bugfix",
+    "title": "stop() could report 'stopped' while cloudflared was still alive holding the secret",
+    "body": "Unloading the launchd job didn't guarantee the child process actually exited, risking a race where callers believed the tunnel was stopped but cloudflared still held the secret/socket. The fix snapshots the PID before unload, polls for up to 3 seconds for the child to exit, and SIGKILLs as a last resort to guarantee termination before reporting success.",
+    "files": [
+     "src/launchd.rs"
+    ],
+    "tags": "launchd process-management race-condition shutdown"
+   }
+  ],
+  "parse_error": null,
+  "lenient": true
+ }
+]
