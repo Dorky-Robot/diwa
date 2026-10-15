@@ -1,4 +1,5 @@
 mod claude;
+mod curate;
 mod daemon;
 mod db;
 mod deep_search;
@@ -118,10 +119,77 @@ pub enum Commands {
         repo: String,
     },
 
+    /// Every insight on one commit, and the closest insights from every repo
+    Show {
+        /// Repo name or path (e.g. "yelo", "Dorky-Robot/yelo", or ".")
+        repo: String,
+        /// Commit sha (abbreviated is fine)
+        sha: String,
+        /// How many related insights to list
+        #[arg(short, default_value = "8")]
+        n: usize,
+        /// Output as JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+
+    /// Add, edit or remove insights by hand
+    Insight {
+        #[command(subcommand)]
+        action: InsightAction,
+    },
+
     /// Manage the background indexing daemon
     Daemon {
         #[command(subcommand)]
         action: DaemonAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum InsightAction {
+    /// Add an insight to a commit
+    Add {
+        /// Repo name or path
+        repo: String,
+        /// Commit sha (abbreviated is fine)
+        sha: String,
+        /// One-line title
+        title: String,
+        /// Longer text; `-` reads it from stdin
+        #[arg(long)]
+        body: Option<String>,
+        /// decision, learning, pattern, architecture, ...
+        #[arg(long, default_value = "note")]
+        category: String,
+        /// Space-separated tags
+        #[arg(long, default_value = "")]
+        tags: String,
+    },
+    /// Change an insight, extracted or manual (the change survives reindex)
+    Edit {
+        /// Insight id, or enough of its start to be unique (`diwa show` lists ids)
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        /// New body; `-` reads it from stdin
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long)]
+        category: Option<String>,
+        #[arg(long)]
+        tags: Option<String>,
+        /// Only look in this repo
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// Remove an insight, extracted or manual (an extracted one stays removed after reindex)
+    Rm {
+        /// Insight id, or enough of its start to be unique
+        id: String,
+        /// Only look in this repo
+        #[arg(long)]
+        repo: Option<String>,
     },
 }
 
@@ -179,6 +247,10 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Update => run_update(),
         Commands::Ls => run_ls(),
         Commands::Stats { repo } => run_stats(&repo),
+        Commands::Show { repo, sha, n, json } => {
+            curate::show(&diwa_dir(), &resolve_slug(&repo)?, &sha, n, json)
+        }
+        Commands::Insight { action } => run_insight(action),
         Commands::Daemon { action } => match action {
             DaemonAction::Install => daemon::install(),
             DaemonAction::Uninstall => daemon::uninstall(),
@@ -199,6 +271,25 @@ fn run_add(full_name: &str, max_commits: usize, batch_size: usize, no_index: boo
         return Ok(());
     }
     run_index(&path, max_commits, batch_size, false)
+}
+
+fn run_insight(action: InsightAction) -> Result<()> {
+    let diwa = diwa_dir();
+    match action {
+        InsightAction::Add { repo, sha, title, body, category, tags } => {
+            let slug = resolve_slug(&repo)?;
+            curate::add(&diwa, &slug, curate::AddArgs { repo, sha, title, body, category, tags })
+        }
+        InsightAction::Edit { id, title, body, category, tags, repo } => {
+            let only = repo.as_deref().map(resolve_slug).transpose()?;
+            let change = db::InsightEdit { category, title, body, tags };
+            curate::edit(&diwa, &id, only.as_deref(), change)
+        }
+        InsightAction::Rm { id, repo } => {
+            let only = repo.as_deref().map(resolve_slug).transpose()?;
+            curate::rm(&diwa, &id, only.as_deref())
+        }
+    }
 }
 
 fn diwa_dir() -> PathBuf {
