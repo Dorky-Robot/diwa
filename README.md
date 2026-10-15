@@ -78,6 +78,10 @@ Categories: `decision`, `pattern`, `learning`, `architecture`, `migration`, `bug
 
 ## Install
 
+```bash
+brew install dorky-robot/tap/diwa
+```
+
 ### From source
 
 ```bash
