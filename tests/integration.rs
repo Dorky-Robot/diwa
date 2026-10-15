@@ -3,6 +3,14 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+/// The binary under test, local even on a machine whose own diwa points at a
+/// remote store (`~/.diwa/remote.json`), so results do not depend on the box.
+fn local_diwa() -> Command {
+    let mut c = Command::new(diwa_bin());
+    c.env("DIWA_REMOTE", "local");
+    c
+}
+
 fn diwa_bin() -> PathBuf {
     // Use the debug binary built by cargo test.
     let mut path = std::env::current_exe()
@@ -18,7 +26,7 @@ fn diwa_bin() -> PathBuf {
 
 #[test]
 fn test_help() {
-    let output = Command::new(diwa_bin()).arg("--help").output().unwrap();
+    let output = local_diwa().arg("--help").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("diwa"));
@@ -30,7 +38,7 @@ fn test_help() {
 
 #[test]
 fn test_version() {
-    let output = Command::new(diwa_bin()).arg("--version").output().unwrap();
+    let output = local_diwa().arg("--version").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("diwa"));
@@ -38,7 +46,7 @@ fn test_version() {
 
 #[test]
 fn test_search_unknown_repo() {
-    let output = Command::new(diwa_bin())
+    let output = local_diwa()
         .args(["search", "nonexistent-repo-xyz", "test query"])
         .output()
         .unwrap();
@@ -49,7 +57,7 @@ fn test_search_unknown_repo() {
 
 #[test]
 fn test_stats_unknown_repo() {
-    let output = Command::new(diwa_bin())
+    let output = local_diwa()
         .args(["stats", "nonexistent-repo-xyz"])
         .output()
         .unwrap();
@@ -60,7 +68,7 @@ fn test_stats_unknown_repo() {
 
 #[test]
 fn test_search_help() {
-    let output = Command::new(diwa_bin())
+    let output = local_diwa()
         .args(["search", "--help"])
         .output()
         .unwrap();
@@ -72,7 +80,7 @@ fn test_search_help() {
 
 #[test]
 fn test_index_help() {
-    let output = Command::new(diwa_bin())
+    let output = local_diwa()
         .args(["index", "--help"])
         .output()
         .unwrap();
@@ -85,7 +93,7 @@ fn test_index_help() {
 #[test]
 fn test_index_not_a_git_repo() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let output = Command::new(diwa_bin())
+    let output = local_diwa()
         .args(["index", tmp.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -119,7 +127,7 @@ fn test_index_does_not_advance_when_claude_fails() {
 
     let home = tmp.path().join("home");
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-    let out = Command::new(diwa_bin())
+    let out = local_diwa()
         .args(["index", repo.to_str().unwrap()])
         .env("DIWA_DIR", &home)
         .env("PATH", path)
@@ -129,7 +137,7 @@ fn test_index_does_not_advance_when_claude_fails() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("without advancing the watermark"), "stderr: {err}");
 
-    let stats = Command::new(diwa_bin())
+    let stats = local_diwa()
         .args(["stats", repo.to_str().unwrap()])
         .env("DIWA_DIR", &home)
         .output()

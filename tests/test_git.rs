@@ -4,6 +4,14 @@ use std::fs;
 use std::process::Command;
 use tempfile::TempDir;
 
+/// The binary under test, local even on a machine whose own diwa points at a
+/// remote store (`~/.diwa/remote.json`), so results do not depend on the box.
+fn local_diwa() -> Command {
+    let mut c = Command::new(diwa_bin());
+    c.env("DIWA_REMOTE", "local");
+    c
+}
+
 fn diwa_bin() -> std::path::PathBuf {
     let mut path = std::env::current_exe()
         .unwrap()
@@ -58,7 +66,7 @@ fn test_index_real_repo_no_remote() {
     ]);
 
     // Index should fail gracefully (no GitHub remote).
-    let output = Command::new(diwa_bin())
+    let output = local_diwa()
         .args(["index", repo.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -70,7 +78,7 @@ fn test_index_real_repo_no_remote() {
 #[test]
 fn test_stats_on_empty_index() {
     // Stats for an indexed repo that exists but is empty.
-    let output = Command::new(diwa_bin())
+    let output = local_diwa()
         .args(["stats", "nonexistent-xyz"])
         .output()
         .unwrap();
