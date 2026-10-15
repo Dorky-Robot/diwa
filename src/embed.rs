@@ -84,6 +84,11 @@ fn with_model<F, T>(f: F) -> Result<T>
 where
     F: FnOnce(&mut TextEmbedding) -> Result<T>,
 {
+    // `DIWA_EMBED=off` skips the model entirely (low-memory hosts, offline
+    // tests): every caller already falls back to keyword search without vectors.
+    if std::env::var("DIWA_EMBED").is_ok_and(|v| v.trim() == "off") {
+        anyhow::bail!("embedding is off (DIWA_EMBED=off)");
+    }
     let mut guard = MODEL
         .lock()
         .map_err(|e| anyhow::anyhow!("model lock poisoned: {e}"))?;
