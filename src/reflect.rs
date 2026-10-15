@@ -381,6 +381,7 @@ fn hydrate(raw: Vec<RawReflection>, insights: &[SearchResult]) -> Vec<Insight> {
                 tags: r.tags.unwrap_or_default(),
                 source_type: "reflection".to_string(),
                 pr_number: None,
+                uid: None,
             }
         })
         .collect()

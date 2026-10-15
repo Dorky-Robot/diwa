@@ -176,6 +176,7 @@ fn hydrate(raw: Vec<RawInsight>, commits: &[CommitData]) -> Vec<Insight> {
                 tags: r.tags.unwrap_or_default(),
                 source_type,
                 pr_number: None,
+                uid: None,
             }
         })
         .collect()
