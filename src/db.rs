@@ -189,6 +189,17 @@ impl IndexDb {
                 value TEXT NOT NULL
             );
 
+            -- Every commit extraction has read (how = 'sent'), or skipped on
+            -- purpose ('noise'), whether or not it yielded an insight. With it a
+            -- walk over the whole history skips what was read instead of
+            -- resending commits that had nothing to say, and the watermark is
+            -- only a shortcut, never the record of what was read.
+            CREATE TABLE IF NOT EXISTS read_commits (
+                sha  TEXT PRIMARY KEY,
+                how  TEXT NOT NULL,
+                at   TEXT NOT NULL
+            );
+
             -- What people did to insights: 'add' (a manual insight, the
             -- source of truth for it), 'edit' and 'delete' (overrides on an
             -- extracted insight, applied again whenever it is re-extracted).
@@ -703,6 +714,36 @@ impl IndexDb {
         Ok(shas)
     }
 
+    /// Record commits as read (`how`: "sent" to extraction, or "noise").
+    pub fn mark_read(&self, shas: &[String], how: &str) -> Result<()> {
+        let at = chrono::Utc::now().to_rfc3339();
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare("INSERT OR IGNORE INTO read_commits (sha, how, at) VALUES (?1, ?2, ?3)")?;
+            for s in shas {
+                stmt.execute(rusqlite::params![s, how, at])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Every commit read: the read record, and (for stores from before it
+    /// existed) every commit with an extracted insight or a person's curation.
+    pub fn read_shas(&self) -> Result<std::collections::HashSet<String>> {
+        let mut shas = self.indexed_shas()?;
+        let mut stmt = self.conn.prepare("SELECT sha FROM read_commits")?;
+        for s in stmt.query_map([], |row| row.get::<_, String>(0))? {
+            shas.insert(s?);
+        }
+        Ok(shas)
+    }
+
+    pub fn count_read(&self) -> Result<usize> {
+        let n: i64 = self.conn.query_row("SELECT COUNT(*) FROM read_commits", [], |r| r.get(0))?;
+        Ok(n as usize)
+    }
+
     pub fn count(&self) -> Result<usize> {
         let count: usize = self
             .conn
@@ -1002,6 +1043,7 @@ impl IndexDb {
             DROP TABLE IF EXISTS insights_fts;
             DROP TABLE IF EXISTS insights;
             DROP TABLE IF EXISTS meta;
+            DROP TABLE IF EXISTS read_commits;
             ",
         )?;
         self.init_schema()?;
