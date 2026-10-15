@@ -160,6 +160,69 @@ pub fn probe(r: &Remote) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Where a machine says its store is: written by the indexing daemon on
+/// start, read by `diwa remote whereami` and, failing that, by `set`'s probe.
+/// It lives in `~/.diwa` whatever DIWA_DIR is, so it can be found by anyone.
+const ADVERT: &str = "hub.json";
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Whereami {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+}
+
+fn advert_path() -> Option<std::path::PathBuf> {
+    Some(std::path::PathBuf::from(std::env::var_os("HOME")?).join(".diwa").join(ADVERT))
+}
+
+/// Record that the store here is `diwa_dir`, served by the running binary.
+/// Called by the daemon: the machine that indexes is the one that holds the store.
+pub fn advertise(diwa_dir: &Path) -> Result<()> {
+    let path = advert_path().context("no HOME")?;
+    let here = Whereami {
+        bin: std::env::current_exe().ok().map(|p| p.display().to_string()),
+        dir: Some(diwa_dir.display().to_string()),
+    };
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    std::fs::write(&path, serde_json::to_string_pretty(&here)? + "\n")?;
+    Ok(())
+}
+
+/// What this machine advertises; empty when it runs no daemon (then the
+/// defaults, `diwa` on PATH and ~/.diwa, are the answer).
+pub fn whereami() -> Whereami {
+    advert_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<Whereami>(&s).ok())
+        .filter(|w| w.bin.as_deref().is_none_or(|b| Path::new(b).exists()))
+        .unwrap_or_default()
+}
+
+/// Ask `host` where its store is. Prefers its `diwa remote whereami`; reads
+/// the advert file directly when the remote diwa is older or not on PATH.
+pub fn discover(host: &str) -> Result<Whereami> {
+    let probe = Remote { host: host.to_string(), bin: None, dir: None };
+    let line = format!(
+        "PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; \
+         DIWA_REMOTE=local diwa remote whereami 2>/dev/null \
+         || cat \"$HOME/.diwa/{ADVERT}\" 2>/dev/null || echo '{{}}'"
+    );
+    let prog = non_empty("DIWA_SSH").unwrap_or_else(|| "ssh".to_string());
+    let out = Command::new(prog)
+        .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", &probe.host])
+        .arg(line)
+        .stdin(Stdio::null())
+        .output()
+        .context("failed to run ssh")?;
+    if out.status.code() == Some(SSH_FAILED) {
+        bail!("cannot reach {host} over ssh: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    Ok(serde_json::from_str(text.trim()).unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +262,13 @@ mod tests {
         assert_eq!(got, want);
         assert!(clear(tmp.path()).unwrap());
         assert!(!clear(tmp.path()).unwrap());
+    }
+
+    #[test]
+    fn whereami_without_advert_is_empty_and_round_trips() {
+        let w = Whereami { bin: Some("/x/diwa".into()), dir: Some("/x/store".into()) };
+        let back: Whereami = serde_json::from_str(&serde_json::to_string(&w).unwrap()).unwrap();
+        assert_eq!(back, w);
+        assert_eq!(serde_json::from_str::<Whereami>("{}").unwrap(), Whereami::default());
     }
 }

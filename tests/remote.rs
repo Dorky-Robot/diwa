@@ -177,3 +177,45 @@ fn set_refuses_a_remote_that_does_not_answer() {
     assert!(!o.status.success());
     assert!(out(&w.on_box(&["remote"])).starts_with("local: "), "nothing saved");
 }
+
+#[test]
+fn flagless_set_finds_the_store_the_hub_advertises() {
+    let w = world();
+    // What the hub's daemon writes on start.
+    let advert = w.hub_home.join(".diwa");
+    std::fs::create_dir_all(&advert).unwrap();
+    std::fs::write(
+        advert.join("hub.json"),
+        format!(
+            "{{\"bin\": \"{}\", \"dir\": \"{}\"}}",
+            diwa_bin().display(),
+            w.hub_home.join("store").display()
+        ),
+    )
+    .unwrap();
+    out(&w.on_hub(&["insight", "add", "widget", &w.sha[..7], "Advertised store"]));
+
+    let set = out(&w.on_box(&["remote", "set", "hub"]));
+    assert!(set.contains("now uses the store on hub"), "{set}");
+    assert!(set.contains("store"), "{set}");
+    assert_eq!(out(&w.on_box(&["ls"])), out(&w.on_hub(&["ls"])));
+    assert!(out(&w.on_box(&["show", "widget", &w.sha])).contains("Advertised store"));
+
+    // An explicit flag still wins over the advert.
+    let o = w.on_box(&["remote", "set", "hub", "--bin", "/nonexistent/diwa"]);
+    assert!(!o.status.success());
+}
+
+#[test]
+fn whereami_reads_the_advert() {
+    let w = world();
+    let o = w.on_hub(&["remote", "whereami"]);
+    assert_eq!(out(&o).trim(), "{}");
+    let advert = w.hub_home.join(".diwa");
+    std::fs::create_dir_all(&advert).unwrap();
+    let bin = diwa_bin().display().to_string();
+    std::fs::write(advert.join("hub.json"), format!("{{\"bin\": \"{bin}\", \"dir\": \"/s\"}}")).unwrap();
+    let got: serde_json::Value = serde_json::from_str(&out(&w.on_hub(&["remote", "whereami"]))).unwrap();
+    assert_eq!(got["bin"], bin.as_str());
+    assert_eq!(got["dir"], "/s");
+}

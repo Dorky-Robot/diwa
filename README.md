@@ -149,10 +149,12 @@ Run diwa with its store on one machine (the hub) and point the others at it:
 
 ```bash
 diwa remote set hub-host                  # any ssh destination: config alias, tailnet name, user@host
-diwa remote set hub-host --bin '~/.local/bin/diwa' --dir '~/.diwa-hub'   # when the hub's diwa or store is elsewhere
+diwa remote set hub-host --bin '~/.local/bin/diwa' --dir '/srv/diwa'     # override what the hub advertises
 diwa remote                               # where is the store, and does it answer
 diwa remote unset                         # back to the local store
 ```
+
+The hub's daemon advertises its binary and data dir in `~/.diwa/hub.json` when it starts (`diwa remote whereami` prints it), so a plain `remote set <host>` finds the store wherever it lives; with no daemon there, the defaults are `diwa` on the hub's PATH and its `~/.diwa`.
 
 After `remote set`, `search`, `ls`, `stats`, `show` and `insight add|edit|rm` run on the hub over ssh and print exactly what they print there; local paths (`diwa search . "..."`) are turned into `org/name` first. Indexing commands are refused: the hub indexes. The setting is `~/.diwa/remote.json`; `DIWA_REMOTE=<host>` overrides it for one shell and `DIWA_REMOTE=local` ignores it. ssh must work non-interactively (keys, `BatchMode`).
 

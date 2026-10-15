@@ -58,6 +58,10 @@ pub fn run(diwa_dir: &Path) -> Result<()> {
             .unwrap_or(600),
     );
     log_line(diwa_dir, &format!("daemon starting (poll every {}s)", poll.as_secs()));
+    // Let other machines find this store with a plain `diwa remote set <host>`.
+    if let Err(e) = crate::remote::advertise(diwa_dir) {
+        log_line(diwa_dir, &format!("could not advertise the store: {e:#}"));
+    }
     loop {
         sweep(diwa_dir);
         std::thread::sleep(poll);

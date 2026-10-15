@@ -221,6 +221,8 @@ pub enum RemoteAction {
     Unset,
     /// Say where the store is
     Show,
+    /// Print where this machine's store is, as JSON (what `set` asks a remote)
+    Whereami,
 }
 
 #[derive(Debug, Subcommand)]
@@ -392,11 +394,23 @@ fn run_remote(action: Option<RemoteAction>) -> Result<()> {
     let diwa = diwa_dir();
     match action.unwrap_or(RemoteAction::Show) {
         RemoteAction::Set { host, bin, dir, no_check } => {
+            // Whatever the remote advertises fills in what was not given.
+            let (bin, dir) = if bin.is_some() && dir.is_some() || no_check {
+                (bin, dir)
+            } else {
+                let found = remote::discover(&host)?;
+                (bin.or(found.bin), dir.or(found.dir))
+            };
             let r = remote::Remote { host, bin, dir };
             let version = if no_check { None } else { Some(remote::probe(&r)?) };
             remote::save(&diwa, &r)?;
             match version {
-                Some(v) => println!("diwa here now uses the store on {} ({v} there).", r.host),
+                Some(v) => println!(
+                    "diwa here now uses the store on {} ({v} there; {}, {}).",
+                    r.host,
+                    r.bin.as_deref().unwrap_or("diwa on its PATH"),
+                    r.dir.as_deref().unwrap_or("its ~/.diwa"),
+                ),
                 None => println!("diwa here now uses the store on {} (not checked).", r.host),
             }
             Ok(())
@@ -410,6 +424,10 @@ fn run_remote(action: Option<RemoteAction>) -> Result<()> {
             if std::env::var("DIWA_REMOTE").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "local") {
                 eprintln!("diwa: DIWA_REMOTE is set in this shell and still points elsewhere.");
             }
+            Ok(())
+        }
+        RemoteAction::Whereami => {
+            println!("{}", serde_json::to_string(&remote::whereami())?);
             Ok(())
         }
         RemoteAction::Show => {
