@@ -36,6 +36,33 @@ pub fn extract_insights(commits: &[CommitData]) -> anyhow::Result<Vec<Insight>> 
     }
 }
 
+/// Split commits into batches that each fit one prompt: at most `batch_size`
+/// commits and at most MAX_PROMPT_CHARS of prompt. A batch that would overflow
+/// ends early and the next commit starts the next batch, so every commit is
+/// sent. (Before, `build_prompt` stopped at the budget and silently dropped the
+/// rest of the batch, while the caller still moved the watermark past them.)
+/// A single commit larger than the budget is a batch of its own, sent with its
+/// diff cut.
+pub fn pack(commits: Vec<CommitData>, batch_size: usize) -> Vec<Vec<CommitData>> {
+    let base = build_prompt(&[]).len();
+    let mut batches: Vec<Vec<CommitData>> = Vec::new();
+    let mut cur: Vec<CommitData> = Vec::new();
+    let mut size = base;
+    for c in commits {
+        let cost = format_commit(&c).len();
+        if !cur.is_empty() && (cur.len() >= batch_size.max(1) || size + cost > MAX_PROMPT_CHARS) {
+            batches.push(std::mem::take(&mut cur));
+            size = base;
+        }
+        size += cost;
+        cur.push(c);
+    }
+    if !cur.is_empty() {
+        batches.push(cur);
+    }
+    batches
+}
+
 fn build_prompt(commits: &[CommitData]) -> String {
     let mut prompt = String::from(
         r#"You are analyzing git commits to extract structured insights for a searchable knowledge base. For each meaningful change, extract the underlying decision, learning, or architectural pattern.
