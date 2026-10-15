@@ -10,6 +10,7 @@ mod github;
 mod manifest;
 mod mirror;
 mod reflect;
+mod remote;
 mod repo;
 mod sanitize;
 mod spinner;
@@ -139,6 +140,12 @@ pub enum Commands {
         action: InsightAction,
     },
 
+    /// Use a diwa store on another machine over ssh, or go back to local
+    Remote {
+        #[command(subcommand)]
+        action: Option<RemoteAction>,
+    },
+
     /// Manage the background indexing daemon
     Daemon {
         #[command(subcommand)]
@@ -194,6 +201,29 @@ pub enum InsightAction {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum RemoteAction {
+    /// Point this machine at the store on <host>: search, ls, stats, show and
+    /// insight then run there, and indexing stays there
+    Set {
+        /// ssh destination (an ~/.ssh/config alias, a tailnet name, user@host)
+        host: String,
+        /// diwa binary on the remote (default: `diwa` on its PATH)
+        #[arg(long)]
+        bin: Option<String>,
+        /// DIWA_DIR on the remote, if its store is not ~/.diwa
+        #[arg(long)]
+        dir: Option<String>,
+        /// Save without first checking that the remote answers
+        #[arg(long)]
+        no_check: bool,
+    },
+    /// Use the local store again
+    Unset,
+    /// Say where the store is
+    Show,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum DaemonAction {
     /// Install the launchd agent so the daemon starts on login
     Install,
@@ -219,6 +249,12 @@ fn main() {
 type BatchPayload = anyhow::Result<(Vec<db::Insight>, Option<Vec<Vec<f32>>>, String)>;
 
 fn run(cli: Cli) -> Result<()> {
+    if let Some(r) = remote::configured(&diwa_dir()) {
+        match forward(&cli.command, &r.host)? {
+            Some((args, stdin)) => std::process::exit(remote::run(&r, &args, stdin)?),
+            None => {} // runs here: `remote` itself, `daemon status|uninstall`
+        }
+    }
     match cli.command {
         Commands::Index {
             dir,
@@ -251,6 +287,7 @@ fn run(cli: Cli) -> Result<()> {
             curate::show(&diwa_dir(), &resolve_slug(&repo)?, &sha, n, json)
         }
         Commands::Insight { action } => run_insight(action),
+        Commands::Remote { action } => run_remote(action),
         Commands::Daemon { action } => match action {
             DaemonAction::Install => daemon::install(),
             DaemonAction::Uninstall => daemon::uninstall(),
@@ -271,6 +308,126 @@ fn run_add(full_name: &str, max_commits: usize, batch_size: usize, no_index: boo
         return Ok(());
     }
     run_index(&path, max_commits, batch_size, false)
+}
+
+/// A repo argument as the remote should see it: paths name checkouts on
+/// this machine, so they become `org/name` here; names pass through.
+fn remote_repo(repo: &str) -> Result<String> {
+    if repo.starts_with('.') || repo.starts_with('/') {
+        Ok(repo::resolve_repo(Path::new(repo))?.full_name)
+    } else {
+        Ok(repo.to_string())
+    }
+}
+
+/// With a remote store: the arguments to run there (and whether it reads
+/// stdin), `None` for commands that run here, or an error for indexing,
+/// which belongs to the machine that has the store. Options go before `--`
+/// and positionals after it, so a query starting with `-` stays a query.
+fn forward(cmd: &Commands, host: &str) -> Result<Option<(Vec<String>, bool)>> {
+    let s = |v: &str| v.to_string();
+    let mut flags: Vec<String> = Vec::new();
+    let opt = |flags: &mut Vec<String>, name: &str, v: &Option<String>| {
+        if let Some(v) = v {
+            flags.push(format!("--{name}"));
+            flags.push(v.clone());
+        }
+    };
+    let (head, pos, stdin): (Vec<String>, Vec<String>, bool) = match cmd {
+        Commands::Search { repo, query, json, n, deep } => {
+            flags.extend(["-n".into(), n.to_string()]);
+            if *json { flags.push(s("--json")); }
+            if *deep { flags.push(s("--deep")); }
+            (vec![s("search")], vec![remote_repo(repo)?, query.clone()], false)
+        }
+        Commands::Ls => (vec![s("ls")], vec![], false),
+        Commands::Stats { repo } => (vec![s("stats")], vec![remote_repo(repo)?], false),
+        Commands::Show { repo, sha, n, json } => {
+            flags.extend(["-n".into(), n.to_string()]);
+            if *json { flags.push(s("--json")); }
+            (vec![s("show")], vec![remote_repo(repo)?, sha.clone()], false)
+        }
+        Commands::Insight { action } => match action {
+            InsightAction::Add { repo, sha, title, body, category, tags } => {
+                opt(&mut flags, "body", body);
+                opt(&mut flags, "category", &Some(category.clone()));
+                opt(&mut flags, "tags", &Some(tags.clone()));
+                let pos = vec![remote_repo(repo)?, sha.clone(), title.clone()];
+                (vec![s("insight"), s("add")], pos, body.as_deref() == Some("-"))
+            }
+            InsightAction::Edit { id, title, body, category, tags, repo } => {
+                opt(&mut flags, "title", title);
+                opt(&mut flags, "body", body);
+                opt(&mut flags, "category", category);
+                opt(&mut flags, "tags", tags);
+                opt(&mut flags, "repo", &repo.as_deref().map(remote_repo).transpose()?);
+                (vec![s("insight"), s("edit")], vec![id.clone()], body.as_deref() == Some("-"))
+            }
+            InsightAction::Rm { id, repo } => {
+                opt(&mut flags, "repo", &repo.as_deref().map(remote_repo).transpose()?);
+                (vec![s("insight"), s("rm")], vec![id.clone()], false)
+            }
+        },
+        Commands::Remote { .. }
+        | Commands::Daemon { action: DaemonAction::Status | DaemonAction::Uninstall } => {
+            return Ok(None)
+        }
+        Commands::Add { .. }
+        | Commands::Index { .. }
+        | Commands::Reindex { .. }
+        | Commands::Reflect { .. }
+        | Commands::Update
+        | Commands::Daemon { .. } => anyhow::bail!(
+            "this diwa uses the store on {host}, and indexing happens there. Run it on {host}, or `diwa remote unset` to index here."
+        ),
+    };
+    let mut args = head;
+    args.extend(flags);
+    args.push(s("--"));
+    args.extend(pos);
+    Ok(Some((args, stdin)))
+}
+
+fn run_remote(action: Option<RemoteAction>) -> Result<()> {
+    let diwa = diwa_dir();
+    match action.unwrap_or(RemoteAction::Show) {
+        RemoteAction::Set { host, bin, dir, no_check } => {
+            let r = remote::Remote { host, bin, dir };
+            let version = if no_check { None } else { Some(remote::probe(&r)?) };
+            remote::save(&diwa, &r)?;
+            match version {
+                Some(v) => println!("diwa here now uses the store on {} ({v} there).", r.host),
+                None => println!("diwa here now uses the store on {} (not checked).", r.host),
+            }
+            Ok(())
+        }
+        RemoteAction::Unset => {
+            if remote::clear(&diwa)? {
+                println!("diwa here uses the local store again ({}).", diwa.display());
+            } else {
+                println!("diwa here already uses the local store ({}).", diwa.display());
+            }
+            if std::env::var("DIWA_REMOTE").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "local") {
+                eprintln!("diwa: DIWA_REMOTE is set in this shell and still points elsewhere.");
+            }
+            Ok(())
+        }
+        RemoteAction::Show => {
+            match remote::configured(&diwa) {
+                Some(r) => {
+                    println!("remote: {}", r.host);
+                    if let Some(b) = &r.bin { println!("  bin: {b}"); }
+                    if let Some(d) = &r.dir { println!("  dir: {d}"); }
+                    match remote::probe(&r) {
+                        Ok(v) => println!("  answers: {v}"),
+                        Err(e) => println!("  not answering: {e:#}"),
+                    }
+                }
+                None => println!("local: {}", diwa.display()),
+            }
+            Ok(())
+        }
+    }
 }
 
 fn run_insight(action: InsightAction) -> Result<()> {
@@ -338,6 +495,10 @@ fn resolve_slug(repo_arg: &str) -> Result<String> {
             .filter(|e| e.path().is_dir())
             .filter_map(|e| e.file_name().into_string().ok())
             .filter(|name| name != "models")
+            // A registered repo is nameable before its first index exists.
+            .chain(manifest::read_manifest(&diwa).into_keys())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
             .collect();
 
         // Exact suffix match: "yelo" matches "Dorky-Robot--yelo"
