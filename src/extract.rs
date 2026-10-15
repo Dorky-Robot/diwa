@@ -165,9 +165,11 @@ fn hydrate(raw: Vec<RawInsight>, commits: &[CommitData]) -> Vec<Insight> {
             };
 
             Insight {
-                commit_sha: r
-                    .commit_sha
-                    .unwrap_or_else(|| commits.first().map(|c| c.sha.clone()).unwrap_or_default()),
+                // Store the full sha: Claude often echoes an abbreviation,
+                // and a stored prefix cannot be joined back to its commit reliably.
+                commit_sha: matching_commit.map(|c| c.sha.clone()).or(r.commit_sha).unwrap_or_else(
+                    || commits.first().map(|c| c.sha.clone()).unwrap_or_default(),
+                ),
                 commit_date: date,
                 category: r.category.unwrap_or_else(|| "learning".to_string()),
                 title: r.title,
@@ -188,7 +190,7 @@ mod tests {
 
     fn dummy_commits() -> Vec<CommitData> {
         vec![CommitData {
-            sha: "abc1234".to_string(),
+            sha: "abc1234def5678".to_string(),
             message: "feat: add pull-based rendering".to_string(),
             diff: "+function pull() {}".to_string(),
             date: "2026-03-28T00:00:00Z".to_string(),
@@ -214,6 +216,7 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].source_type, "git");
         assert!(results[0].pr_number.is_none());
+        assert_eq!(results[0].commit_sha, "abc1234def5678", "abbreviated sha is expanded");
     }
 
     #[test]
