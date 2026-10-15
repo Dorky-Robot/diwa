@@ -440,6 +440,9 @@ pub(crate) fn run_index(
             }
         };
         let last_sha = batch.last().map(|c| c.sha.clone()).unwrap_or_default();
+        // Re-extraction must come back the way a person left it: apply their
+        // edits and deletes before the text is embedded.
+        let insights = db.curate(insights)?;
 
         // While we wait for nothing here, flush the previous batch's embeddings.
         if let Some(handle) = pending.take() {
@@ -552,6 +555,7 @@ pub(crate) fn run_index(
             &resolved.local_path,
             period_label,
         );
+        let reflections = db.curate(reflections)?;
 
         if !reflections.is_empty() {
             let texts: Vec<String> = reflections.iter().map(|r| r.embedding_text()).collect();
@@ -774,6 +778,7 @@ fn run_reflect(repo_arg: &str) -> Result<()> {
         }
     };
 
+    let reflections = db.curate(reflections)?;
     if reflections.is_empty() {
         println!("No reflections generated.");
         return Ok(());
