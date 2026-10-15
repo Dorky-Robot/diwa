@@ -1,10 +1,10 @@
 #!/bin/sh
 # Hourly consistent copy of the hub's indexes to the external drive.
 #
-#   sh hub-replicate.sh                  one copy, now
-#   DIWA_DIR=... HUB_BACKUPS=... sh hub-replicate.sh
+#   HUB_VOLUME=/Volumes/Backup sh hub-replicate.sh
+#   DIWA_DIR=... HUB_VOLUME=... HUB_BACKUPS=... sh hub-replicate.sh
 #
-# Same shape as everyday-vet-admin/backup.sh, for the same reasons:
+# Why it is shaped this way:
 #  - `sqlite3 .backup`, never `cp`: the daemon writes while this runs and a
 #    copy without its -wal quietly loses the latest insights.
 #  - refuses when the drive is not mounted, so a "backup" cannot land on the
@@ -18,7 +18,7 @@ set -eu
 PATH=/sbin:/usr/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH
 
 DIWA_DIR=${DIWA_DIR:-$HOME/.diwa-hub}
-VOLUME=${HUB_VOLUME:-/Volumes/Orange4TB}
+VOLUME=${HUB_VOLUME:?set HUB_VOLUME to the mount point of the backup drive, e.g. /Volumes/Backup}
 DEST=${HUB_BACKUPS:-$VOLUME/diwa-hub-snapshots}
 KEEP_DAYS=${HUB_BACKUPS_KEEP:-30}
 SQLITE=${SQLITE3:-sqlite3}
