@@ -101,6 +101,14 @@ diwa search <repo> "query" -n 5         Limit results
 
 diwa stats <repo>                       Show index info
 diwa ls                                 List all indexed repos
+diwa show <repo> <sha>                  Every insight on a commit + related ones from all repos
+
+diwa insight add <repo> <sha> "title"   Add an insight by hand (--body, --category, --tags)
+diwa insight edit <id> --title ...      Change any insight; survives reindex
+diwa insight rm <id>                    Remove any insight; stays removed after reindex
+
+diwa remote set <host>                  Use the store on another machine over ssh
+diwa remote unset                       Use the local store again
 
 diwa daemon status                      Check if the background daemon is running
 diwa daemon install                     Install the launchd agent
@@ -115,17 +123,45 @@ The `<repo>` argument accepts a short name (`yelo`), full name (`Dorky-Robot/yel
 
 `diwa index` is safe to re-run — it queries existing commit SHAs and skips anything already processed. If the daemon was down, the next trigger fills the gap. No duplicates.
 
+## Insights by hand
+
+Most insights are extracted, but some things are only known to the person who was there. Add them to the commit they belong to, and correct or remove what extraction got wrong:
+
+```bash
+diwa insight add yelo 3f9a2c1 "Pull rendering only works because the PTY resize is debounced" \
+    --body "Without the 50ms debounce the race comes back on iPad." --category learning --tags "rendering ipad"
+diwa show yelo 3f9a2c1                    # every insight on the commit, with ids, plus related ones
+diwa insight edit 5d0b8ddf --title "..."  # any unique start of an id; works on extracted insights too
+diwa insight rm 9a3759f8
+```
+
+`--body -` reads the body from stdin. An edit or removal of an extracted insight is kept as an override, so `diwa reindex` extracts the commit again and then applies it; manual insights are restored after a reindex. All of this lives in the index (`curations` table), so back the index up.
+
+`diwa show <repo> <sha>` lists each insight with how it came to be (extracted, edited, reflection, manual) and then the nearest insights from every indexed repo, with repo and sha, so the next `diwa show` is one copy-paste away.
+
+## One store, many machines
+
+Run diwa with its store on one machine (the hub) and point the others at it:
+
+```bash
+diwa remote set hub-host                  # any ssh destination: config alias, tailnet name, user@host
+diwa remote set hub-host --bin '~/.local/bin/diwa' --dir '~/.diwa-hub'   # when the hub's diwa or store is elsewhere
+diwa remote                               # where is the store, and does it answer
+diwa remote unset                         # back to the local store
+```
+
+After `remote set`, `search`, `ls`, `stats`, `show` and `insight add|edit|rm` run on the hub over ssh and print exactly what they print there; local paths (`diwa search . "..."`) are turned into `org/name` first. Indexing commands are refused: the hub indexes. The setting is `~/.diwa/remote.json`; `DIWA_REMOTE=<host>` overrides it for one shell and `DIWA_REMOTE=local` ignores it. ssh must work non-interactively (keys, `BatchMode`).
+
 ## Running the hub
 
-One instance (the mini) holds every index; other machines query it.
-
-- **Data dir:** `DIWA_DIR` (hub: `~/.diwa-hub`). **Label:** `com.dorky-robot.diwa-hub` (`DIWA_LABEL` overrides). The plist is `Nice 10`, `ProcessType Background`, and carries the `DIWA_*` settings it was installed with. Extraction is strictly sequential: one `claude` call at a time.
-- **Install/restart:** `diwa daemon install`. A first install bootstraps; a repeat with an unchanged plist is `launchctl kickstart -k`; a changed plist reloads in a detached shell. It never runs a foreground bootout then bootstrap.
-- **Model:** `DIWA_MODEL=sonnet`, `DIWA_EFFORT=low`. The old dr2 daemon pinned `claude -p` to Haiku through `~/.diwa/agent-cwd/.claude/settings.json`; the hub does not read that file (`--setting-sources project` plus an explicit `--model`), so it runs Sonnet low.
-- **Private repos:** the mirror is cloned with git, so the host needs a working git credential. On the mini that is the ssh key (`DIWA_GITHUB_BASE=git@github.com:`); `gh` is not required.
+- **Data dir:** `DIWA_DIR` (default `~/.diwa`). **Label:** `com.dorky-robot.diwa-hub` (`DIWA_LABEL` overrides). The plist is `Nice 10`, `ProcessType Background`, and carries the `DIWA_*` settings it was installed with. Extraction is strictly sequential: one `claude` call at a time.
+- **Install/restart:** `diwa daemon install`. A first install bootstraps; a repeat with an unchanged plist is `launchctl kickstart -k`; a changed plist reloads in a detached shell. It never runs a foreground bootout then bootstrap, which would cut an ssh session running it.
+- **Model:** `DIWA_MODEL` (default `sonnet`), `DIWA_EFFORT` (default `low`). `claude -p` runs with `--setting-sources project` and an explicit `--model`, from an empty working dir under the data dir, so user settings and hooks do not apply.
+- **Throttle:** `DIWA_SWEEP_MAX_COMMITS` caps commits per repo per sweep, so a backfill spends in bounded slices; `cost.jsonl` logs tokens per call.
+- **Private repos:** mirrors are cloned with git, so the host needs a working git credential; `DIWA_GITHUB_BASE=git@github.com:` uses ssh. `gh` is optional.
 - **If `claude` is logged out**, indexing stops without advancing the watermark and logs the error; the next poll retries. Nothing is lost.
-- **Other machines:** `scripts/diwa-shim.sh` forwards `search`, `ls` and `stats` to the hub over ssh with the same output shape. In `ls`, the path column is the hub's bare mirror (`~/.diwa-hub/repos/<org>--<name>.git`), not a checkout.
-- **Replication:** `scripts/hub-replicate.sh` takes `sqlite3 .backup` copies hourly to the external drive and refuses when it is unmounted.
+- **Low memory:** `DIWA_EMBED=off` skips the embedding model; search falls back to keywords.
+- **Backups:** `scripts/hub-replicate.sh` takes `sqlite3 .backup` copies of every index to a mounted volume (`HUB_VOLUME`) and refuses when it is not mounted. The mirrors are not copied; they re-clone.
 
 ## Requirements
 
@@ -151,7 +187,7 @@ Everything lives under `~/.diwa/`:
     index.db
 ```
 
-The index is a cache. The source of truth is always git. `diwa reindex` rebuilds from scratch.
+Extracted insights are a cache of git: `diwa reindex` rebuilds them from scratch. Insights added, edited or removed by hand are not; they live in the index too and survive a reindex, so they are what backups protect.
 
 ## Part of the Dorky Robot stack
 
