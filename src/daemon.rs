@@ -74,6 +74,10 @@ fn sweep(diwa_dir: &Path) {
     let mut repos: Vec<_> = manifest::read_manifest(diwa_dir).into_iter().collect();
     repos.sort();
     let max_commits = sweep_max_commits();
+    let horizon = catch_up_since(diwa_dir);
+    if let Some(h) = &horizon {
+        log_line(diwa_dir, &format!("catching up on commits since {h} that were never read"));
+    }
     for (slug, path) in repos {
         if !path.exists() {
             log_line(diwa_dir, &format!("path missing for '{slug}': {}", path.display()));
@@ -87,7 +91,7 @@ fn sweep(diwa_dir: &Path) {
                 continue;
             }
         }
-        match crate::run_index(&path, max_commits, 8, false) {
+        match crate::run_index(&path, max_commits, 8, false, horizon.as_deref()) {
             Ok(_) => log_line(diwa_dir, &format!("done {slug}")),
             Err(e) => log_line(diwa_dir, &format!("error {slug}: {e:#}")),
         }
@@ -96,6 +100,18 @@ fn sweep(diwa_dir: &Path) {
         let (calls, tin, tout) = crate::claude::usage_totals(&log);
         log_line(diwa_dir, &format!("sweep over; usage to date: {calls} claude calls, {tin} tokens in, {tout} out"));
     }
+}
+
+/// How far back each sweep also reads commits that were never read
+/// (`DIWA_CATCH_UP_SINCE`, else the first line of `<store>/catch-up-since`,
+/// a date git understands). Unset: only what is new since the watermark. The
+/// file can be written or removed while the daemon runs; nothing restarts.
+fn catch_up_since(diwa_dir: &Path) -> Option<String> {
+    std::env::var("DIWA_CATCH_UP_SINCE")
+        .ok()
+        .or_else(|| fs::read_to_string(diwa_dir.join("catch-up-since")).ok())
+        .map(|s| s.lines().next().unwrap_or("").trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Commits one repo may index per sweep (`DIWA_SWEEP_MAX_COMMITS`, default
@@ -160,7 +176,7 @@ pub fn install() -> Result<()> {
 
     // Carry the settings that make this instance what it is into the plist.
     let mut extra_env = String::new();
-    for key in ["DIWA_DIR", "DIWA_MODEL", "DIWA_EFFORT", "DIWA_POLL_SECS", "DIWA_CLAUDE_TIMEOUT_SECS", "DIWA_GITHUB_BASE", "DIWA_SWEEP_MAX_COMMITS"] {
+    for key in ["DIWA_DIR", "DIWA_MODEL", "DIWA_EFFORT", "DIWA_POLL_SECS", "DIWA_CLAUDE_TIMEOUT_SECS", "DIWA_GITHUB_BASE", "DIWA_SWEEP_MAX_COMMITS", "DIWA_CATCH_UP_SINCE"] {
         if let Ok(v) = std::env::var(key) {
             extra_env.push_str(&format!(
                 "\n        <key>{key}</key>\n        <string>{}</string>",

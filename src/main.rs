@@ -62,6 +62,11 @@ pub enum Commands {
         /// Commits per Claude batch
         #[arg(long, default_value = "8")]
         batch_size: usize,
+
+        /// Also read every commit made since this date that was never read
+        /// (a backfill for history an older diwa skipped), oldest first
+        #[arg(long)]
+        catch_up_since: Option<String>,
     },
 
     /// Rebuild index from scratch
@@ -247,8 +252,27 @@ fn main() {
 }
 
 /// What one indexing batch hands back to the pipeline: the insights Claude
-/// extracted, their embeddings, and the batch's last SHA (the new watermark).
-type BatchPayload = anyhow::Result<(Vec<db::Insight>, Option<Vec<Vec<f32>>>, String)>;
+/// extracted, their embeddings, and every commit the batch read.
+type BatchPayload = anyhow::Result<(Vec<db::Insight>, Option<Vec<Vec<f32>>>, Vec<String>)>;
+
+/// Move the watermark to the newest commit of the range such that every
+/// commit up to it has been read. It is a shortcut for the next run's `git
+/// log`, never the record of what was read (that is `read_commits`), so it
+/// never jumps over a commit that was not.
+fn advance_watermark(db: &db::IndexDb, in_range: &[git::CommitHead], read: &std::collections::HashSet<String>) -> Result<()> {
+    let mut last = None;
+    for c in in_range {
+        if read.contains(&c.sha) {
+            last = Some(&c.sha);
+        } else {
+            break;
+        }
+    }
+    if let Some(sha) = last {
+        db.set_last_indexed_sha(sha)?;
+    }
+    Ok(())
+}
 
 fn run(cli: Cli) -> Result<()> {
     if let Some(r) = remote::configured(&diwa_dir()) {
@@ -262,7 +286,8 @@ fn run(cli: Cli) -> Result<()> {
             dir,
             max_commits,
             batch_size,
-        } => run_index(&dir, max_commits, batch_size, false),
+            catch_up_since,
+        } => run_index(&dir, max_commits, batch_size, false, catch_up_since.as_deref()),
         Commands::Add {
             full_name,
             max_commits,
@@ -273,7 +298,7 @@ fn run(cli: Cli) -> Result<()> {
             dir,
             max_commits,
             batch_size,
-        } => run_index(&dir, max_commits, batch_size, true),
+        } => run_index(&dir, max_commits, batch_size, true, None),
         Commands::Search {
             repo,
             query,
@@ -309,7 +334,7 @@ fn run_add(full_name: &str, max_commits: usize, batch_size: usize, no_index: boo
         println!("Registered {owner}/{name} -> {}", path.display());
         return Ok(());
     }
-    run_index(&path, max_commits, batch_size, false)
+    run_index(&path, max_commits, batch_size, false, None)
 }
 
 /// A repo argument as the remote should see it: paths name checkouts on
@@ -573,6 +598,7 @@ pub(crate) fn run_index(
     max_commits: usize,
     batch_size: usize,
     reindex: bool,
+    catch_up_since: Option<&str>,
 ) -> Result<()> {
     let diwa = diwa_dir();
     std::fs::create_dir_all(&diwa)?;
@@ -590,18 +616,18 @@ pub(crate) fn run_index(
         db.reset()?;
     }
 
-    let since_sha = if reindex {
-        None
-    } else {
-        db.last_indexed_sha()?
-    };
+    // What has been read: the read record, plus (in stores from before it)
+    // every commit that has an insight. A reindex starts from nothing.
+    let mut read = if reindex { std::collections::HashSet::new() } else { db.read_shas()? };
+
+    let watermark = if reindex { None } else { db.last_indexed_sha()? };
     // A watermark the repo no longer has (it lived on an unpushed branch or
     // was rewritten away) makes `git log <sha>..HEAD` fail forever. Walk from
-    // the start instead; commits that already have insights are skipped below.
-    let since_sha = match since_sha {
+    // the start instead; commits already read are skipped below.
+    let watermark = match watermark {
         Some(sha) if !git::commit_exists(&resolved.local_path, &sha) => {
             println!(
-                "Watermark {} is not in this repo; walking its history, skipping commits already indexed.",
+                "Watermark {} is not in this repo; walking its history, skipping commits already read.",
                 &sha[..7.min(sha.len())]
             );
             None
@@ -609,71 +635,61 @@ pub(crate) fn run_index(
         other => other,
     };
 
-    if let Some(ref sha) = since_sha {
-        println!(
-            "Indexing {} incrementally (since {})...",
-            resolved.full_name,
-            &sha[..7.min(sha.len())]
-        );
-    } else {
-        println!("Indexing {} (full history)...", resolved.full_name);
+    match &watermark {
+        Some(sha) => println!("Indexing {} incrementally (since {})...", resolved.full_name, &sha[..7.min(sha.len())]),
+        None => println!("Indexing {} (full history)...", resolved.full_name),
     }
 
-    let commits = git::list_commits(
-        &resolved.local_path,
-        since_sha.as_deref(),
-        Some(max_commits),
-    )?;
-    let commits = git::filter_noise(commits);
-
-    // The newest commit git offered us, captured BEFORE dedup filtering. If
-    // every commit turns out to be already-indexed we still need this to move
-    // the watermark — see the `commits.is_empty()` branch below.
-    let newest_seen = commits.last().map(|c| c.sha.clone());
-
-    // Deduplicate: skip commits that already have insights (makes `diwa index` idempotent).
-    let existing_shas = db.indexed_shas()?;
-    let commits: Vec<_> = if existing_shas.is_empty() {
-        commits
-    } else {
-        let before = commits.len();
-        let filtered: Vec<_> = commits
-            .into_iter()
-            .filter(|c| !existing_shas.contains(&c.sha))
-            .collect();
-        if before != filtered.len() {
-            println!(
-                "Skipping {} already-indexed commits.",
-                before - filtered.len()
-            );
+    // The commits since the watermark, oldest first; and with a catch-up
+    // horizon, every commit made since then that was never read (older
+    // sweeps lost commits: see git::list_heads), still oldest first.
+    let range = watermark.as_ref().map(|s| format!("{s}..HEAD")).unwrap_or_else(|| "HEAD".into());
+    let in_range = git::list_heads(&resolved.local_path, &range, None)?;
+    let candidates: Vec<git::CommitHead> = match catch_up_since {
+        Some(h) => {
+            let since = git::list_heads(&resolved.local_path, "HEAD", Some(h))?;
+            let later: std::collections::HashSet<&str> = since.iter().map(|c| c.sha.as_str()).collect();
+            let mut v: Vec<git::CommitHead> = in_range.iter().filter(|c| !later.contains(c.sha.as_str())).cloned().collect();
+            v.extend(since.iter().cloned());
+            v
         }
-        filtered
+        None => in_range.clone(),
     };
 
-    if commits.is_empty() {
-        // Everything git offered is already indexed — but the WATERMARK was
-        // never advanced past whatever it pointed at, so `last_indexed_sha`
-        // kept naming an old commit while the content was fully current.
-        //
-        // That is not cosmetic. staleness.rs measures the gap from this value,
-        // so the banner said "BEHIND HEAD" and told the user to run an index
-        // that would immediately answer "No new commits to index" — a warning
-        // that cannot be cleared by obeying it. It also made every incremental
-        // run re-walk and re-skip the same commits, growing forever.
-        //
-        // Having verified they are all present, say so.
-        if let Some(sha) = newest_seen {
-            db.set_last_indexed_sha(&sha)?;
-        }
+    // Noise is read on purpose and never sent.
+    let noise: Vec<String> = candidates
+        .iter()
+        .filter(|c| !read.contains(&c.sha) && git::is_noise(&c.message))
+        .map(|c| c.sha.clone())
+        .collect();
+    if !noise.is_empty() {
+        db.mark_read(&noise, "noise")?;
+        read.extend(noise);
+    }
+    let already = candidates.iter().filter(|c| read.contains(&c.sha)).count();
+    let mut todo: Vec<git::CommitHead> = candidates.into_iter().filter(|c| !read.contains(&c.sha)).collect();
+    if already > 0 && !todo.is_empty() {
+        println!("Skipping {already} commits already read.");
+    }
+    let waiting = todo.len().saturating_sub(max_commits);
+    // Oldest first, so what waits for the next run is always the newest.
+    todo.truncate(max_commits);
+
+    if todo.is_empty() {
+        advance_watermark(&db, &in_range, &read)?;
         println!("No new commits to index.");
         return Ok(());
     }
 
-    println!("Found {} commits to process.", commits.len());
+    if waiting > 0 {
+        println!("Found {} commits to process ({waiting} more wait for the next run).", todo.len());
+    } else {
+        println!("Found {} commits to process.", todo.len());
+    }
+    let mut commits = git::load(&resolved.local_path, todo)?;
 
     // Enrich with GitHub PR data if available. A failure here degrades the
     // insight quality but shouldn't abort indexing, so we warn and continue.
-    let mut commits = commits;
     if github::gh_available() {
         println!("Enriching with GitHub PR data...");
         if let Err(e) = github::enrich_with_prs(&mut commits, &resolved.full_name) {
@@ -683,7 +699,9 @@ pub(crate) fn run_index(
 
     println!("Generating embeddings with BGE-small-en-v1.5 (first run downloads ~33MB model).");
 
-    let batches = git::batch_commits(commits, batch_size);
+    // Every commit goes into some prompt: batches are cut by size as well as
+    // count (extract::pack), never truncated inside the prompt.
+    let batches = extract::pack(commits, batch_size);
     let total_batches = batches.len();
     let mut total_insights = 0;
 
@@ -692,24 +710,27 @@ pub(crate) fn run_index(
 
     for (i, batch) in batches.iter().enumerate() {
         print!("  Batch {}/{total_batches}...", i + 1);
+        let shas: Vec<String> = batch.iter().map(|c| c.sha.clone()).collect();
 
         // Start Claude extraction (blocking — this is the slow part).
         let insights = match extract::extract_insights(batch) {
             Ok(i) => i,
             Err(e) => {
                 // Claude could not run. Store what earlier batches produced,
-                // leave the watermark where it is, and let the next run retry.
+                // move the watermark only over what was read, and let the next
+                // run retry the rest.
                 println!();
                 if let Some(handle) = pending.take() {
-                    if let Ok(Ok((pi, pe, psha))) = handle.join() {
+                    if let Ok(Ok((pi, pe, pshas))) = handle.join() {
                         db.insert_insights_with_embeddings(&pi, pe.as_deref())?;
-                        db.set_last_indexed_sha(&psha)?;
+                        db.mark_read(&pshas, "sent")?;
+                        read.extend(pshas);
                     }
                 }
-                anyhow::bail!("insight extraction unavailable, stopping without advancing the watermark: {e:#}");
+                advance_watermark(&db, &in_range, &read)?;
+                anyhow::bail!("insight extraction unavailable, stopping without advancing the watermark past unread commits: {e:#}");
             }
         };
-        let last_sha = batch.last().map(|c| c.sha.clone()).unwrap_or_default();
         // Re-extraction must come back the way a person left it: apply their
         // edits and deletes before the text is embedded.
         let insights = db.curate(insights)?;
@@ -717,9 +738,10 @@ pub(crate) fn run_index(
         // While we wait for nothing here, flush the previous batch's embeddings.
         if let Some(handle) = pending.take() {
             match handle.join() {
-                Ok(Ok((prev_insights, prev_embeddings, prev_sha))) => {
+                Ok(Ok((prev_insights, prev_embeddings, prev_shas))) => {
                     db.insert_insights_with_embeddings(&prev_insights, prev_embeddings.as_deref())?;
-                    db.set_last_indexed_sha(&prev_sha)?;
+                    db.mark_read(&prev_shas, "sent")?;
+                    read.extend(prev_shas);
                     total_insights += prev_insights.len();
                 }
                 Ok(Err(e)) => eprintln!("\n  Warning: embedding failed ({e})"),
@@ -731,7 +753,6 @@ pub(crate) fn run_index(
             print!(" {} insights", insights.len());
             // Spawn embedding in background thread.
             let insights_clone = insights.clone();
-            let sha = last_sha.clone();
             pending = Some(std::thread::spawn(move || {
                 let texts: Vec<String> = insights_clone
                     .iter()
@@ -746,13 +767,12 @@ pub(crate) fn run_index(
                         None
                     }
                 };
-                Ok((insights_clone, embeddings, sha))
+                Ok((insights_clone, embeddings, shas))
             }));
         } else {
             print!(" (no insights)");
-            if !last_sha.is_empty() {
-                db.set_last_indexed_sha(&last_sha)?;
-            }
+            db.mark_read(&shas, "sent")?;
+            read.extend(shas);
         }
         println!();
     }
@@ -760,15 +780,17 @@ pub(crate) fn run_index(
     // Flush the last pending batch.
     if let Some(handle) = pending.take() {
         match handle.join() {
-            Ok(Ok((prev_insights, prev_embeddings, prev_sha))) => {
+            Ok(Ok((prev_insights, prev_embeddings, prev_shas))) => {
                 db.insert_insights_with_embeddings(&prev_insights, prev_embeddings.as_deref())?;
-                db.set_last_indexed_sha(&prev_sha)?;
+                db.mark_read(&prev_shas, "sent")?;
+                read.extend(prev_shas);
                 total_insights += prev_insights.len();
             }
             Ok(Err(e)) => eprintln!("  Warning: embedding failed ({e})"),
             Err(_) => eprintln!("  Warning: embedding thread panicked"),
         }
     }
+    advance_watermark(&db, &in_range, &read)?;
 
     println!(
         "\n{} insights indexed for {}.",
@@ -1114,7 +1136,7 @@ fn run_update() -> Result<()> {
         }
 
         // Run incremental index (picks up new commits + latest prompts).
-        match run_index(path, 5000, 8, false) {
+        match run_index(path, 5000, 8, false, None) {
             Ok(_) => println!("done."),
             Err(e) => {
                 println!("index failed ({e}).");
@@ -1194,6 +1216,7 @@ fn run_stats(repo_arg: &str) -> Result<()> {
     println!("  Insights:      {total}");
     println!("  With vectors:  {with_embeddings}");
     println!("  Last indexed:  {}", &last_sha[..7.min(last_sha.len())]);
+    println!("  Commits read:  {} recorded", db.count_read()?);
     println!("  Database:      {}/{slug}/index.db", diwa.display());
 
     Ok(())
