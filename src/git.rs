@@ -349,3 +349,61 @@ mod commit_exists_tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 }
+
+/// A commit named by a (possibly abbreviated) revision, as stored in insights.
+#[derive(Debug, Clone)]
+pub struct CommitRef {
+    pub sha: String,
+    /// Author date, ISO 8601 — the same date indexing stores.
+    pub date: String,
+    pub subject: String,
+}
+
+/// Resolve `rev` to a commit in the repo at `path`, or `None` if it is not one.
+pub fn resolve_commit(path: &Path, rev: &str) -> Option<CommitRef> {
+    // A leading dash would be read as an option.
+    if rev.is_empty() || rev.starts_with('-') {
+        return None;
+    }
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["log", "-1", "--no-walk", "--format=%H%x00%aI%x00%s"])
+        .arg(format!("{rev}^{{commit}}"))
+        .arg("--")
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut parts = text.trim_end_matches('\n').splitn(3, '\0');
+    Some(CommitRef {
+        sha: parts.next()?.to_string(),
+        date: parts.next()?.to_string(),
+        subject: parts.next().unwrap_or("").to_string(),
+    })
+}
+
+#[cfg(test)]
+mod resolve_commit_tests {
+    use super::*;
+
+    #[test]
+    fn abbreviated_sha_resolves_and_junk_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path();
+        let git = |a: &[&str]| Command::new("git").arg("-C").arg(d).args(a).output().unwrap();
+        git(&["init", "-q"]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "first line\n\nbody"]);
+        let head = String::from_utf8(git(&["rev-parse", "HEAD"]).stdout).unwrap();
+        let head = head.trim();
+        let c = resolve_commit(d, &head[..7]).unwrap();
+        assert_eq!(c.sha, head);
+        assert_eq!(c.subject, "first line");
+        assert!(!c.date.is_empty());
+        assert!(resolve_commit(d, "deadbeefdead").is_none());
+        assert!(resolve_commit(d, "--all").is_none());
+    }
+}
