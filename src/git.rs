@@ -24,78 +24,81 @@ const FIELD_SEP: &str = "---SIPAG-FIELD-SEP---";
 /// Maximum diff size per commit (chars). Larger diffs are truncated.
 const MAX_DIFF_CHARS: usize = 2000;
 
-/// List commits from a repo, optionally starting after a given SHA.
+/// One commit as `git log` lists it: cheap enough to list a whole history,
+/// so what has already been read can be dropped before any diff is loaded.
+#[derive(Debug, Clone)]
+pub struct CommitHead {
+    pub sha: String,
+    pub message: String,
+    pub date: String,
+    pub author: String,
+}
+
+/// Commit heads in `range` (`<sha>..HEAD`, or `HEAD`), oldest first, merges
+/// left out; `since` (a date git understands) keeps only commits made after it.
 ///
-/// Returns commits in chronological order (oldest first) for natural batching.
-pub fn list_commits(
-    repo_path: &Path,
-    since_sha: Option<&str>,
-    max_commits: Option<usize>,
-) -> Result<Vec<CommitData>> {
+/// Never `--max-count` here: git applies it BEFORE `--reverse`, so a range of
+/// 100 commits asked for 25 gave the newest 25, and an indexer whose watermark
+/// then moved to HEAD never saw the 75 older ones (the hub ran this way with
+/// `DIWA_SWEEP_MAX_COMMITS=25`). Callers truncate the oldest-first list.
+pub fn list_heads(repo_path: &Path, range: &str, since: Option<&str>) -> Result<Vec<CommitHead>> {
     let dir = repo_path.to_string_lossy();
-
-    // Build git log range.
-    let range = match since_sha {
-        Some(sha) => format!("{sha}..HEAD"),
-        None => "HEAD".to_string(),
-    };
-
-    let max_count = max_commits.unwrap_or(5000).to_string();
-
     let format = format!("{RECORD_SEP}%H{FIELD_SEP}%s%n%b{FIELD_SEP}%aI{FIELD_SEP}%an");
-
-    let output = Command::new("git")
-        .args([
-            "-C",
-            &dir,
-            "log",
-            "--no-merges",
-            "--reverse",
-            &format!("--max-count={max_count}"),
-            &format!("--pretty=format:{format}"),
-            &range,
-        ])
-        .output()
-        .context("failed to run git log")?;
-
+    let mut args: Vec<String> = vec![
+        "-C".into(),
+        dir.to_string(),
+        "log".into(),
+        "--no-merges".into(),
+        "--reverse".into(),
+        format!("--pretty=format:{format}"),
+    ];
+    if let Some(d) = since {
+        // git reads a bare date as that date at the current time of day; a
+        // horizon means the start of the day
+        let bare = d.len() == 10 && d.as_bytes()[4] == b'-' && d.as_bytes()[7] == b'-';
+        args.push(if bare { format!("--since={d} 00:00:00") } else { format!("--since={d}") });
+    }
+    args.push(range.to_string());
+    let output = Command::new("git").args(&args).output().context("failed to run git log")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("git log failed: {stderr}");
     }
-
     let log = String::from_utf8_lossy(&output.stdout);
-    let mut commits = Vec::new();
-
+    let mut heads = Vec::new();
     for record in log.split(RECORD_SEP).skip(1) {
         let fields: Vec<&str> = record.splitn(4, FIELD_SEP).collect();
         if fields.len() < 4 {
             continue;
         }
+        heads.push(CommitHead {
+            sha: fields[0].trim().to_string(),
+            message: fields[1].trim().to_string(),
+            date: fields[2].trim().to_string(),
+            author: fields[3].trim().to_string(),
+        });
+    }
+    Ok(heads)
+}
 
-        let sha = fields[0].trim().to_string();
-        let message = fields[1].trim().to_string();
-        let date = fields[2].trim().to_string();
-        let author = fields[3].trim().to_string();
-
-        // Get diff for this commit (truncated).
-        let diff = commit_diff(repo_path, &sha)?;
-
-        // Get changed file list.
-        let files = commit_files(repo_path, &sha)?;
-
+/// Load what extraction reads for each head: its diff (truncated) and files.
+pub fn load(repo_path: &Path, heads: Vec<CommitHead>) -> Result<Vec<CommitData>> {
+    let mut commits = Vec::with_capacity(heads.len());
+    for h in heads {
+        let diff = commit_diff(repo_path, &h.sha)?;
+        let files = commit_files(repo_path, &h.sha)?;
         commits.push(CommitData {
-            sha,
-            message,
+            sha: h.sha,
+            message: h.message,
             diff,
-            date,
-            author,
+            date: h.date,
+            author: h.author,
             files,
             pr_title: None,
             pr_body: None,
             review_comments: None,
         });
     }
-
     Ok(commits)
 }
 
@@ -161,28 +164,22 @@ fn commit_files(repo_path: &Path, sha: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Split commits into batches for processing.
-pub fn batch_commits(commits: Vec<CommitData>, batch_size: usize) -> Vec<Vec<CommitData>> {
-    commits
-        .chunks(batch_size)
-        .map(|chunk| chunk.to_vec())
-        .collect()
+/// A commit message that says nothing worth extracting (formula updates,
+/// version bumps, release tags, merges).
+pub fn is_noise(message: &str) -> bool {
+    let msg = message.to_lowercase();
+    msg.starts_with("formula:")
+        || msg.starts_with("release:")
+        || msg.starts_with("chore: bump version")
+        || msg.starts_with("chore: update formula")
+        || msg.starts_with("merge pull request")
+        || msg.starts_with("merge branch")
 }
 
 /// Filter out noise commits (formula updates, version bumps, release tags).
-pub fn filter_noise(commits: Vec<CommitData>) -> Vec<CommitData> {
-    commits
-        .into_iter()
-        .filter(|c| {
-            let msg = c.message.to_lowercase();
-            !msg.starts_with("formula:")
-                && !msg.starts_with("release:")
-                && !msg.starts_with("chore: bump version")
-                && !msg.starts_with("chore: update formula")
-                && !msg.starts_with("merge pull request")
-                && !msg.starts_with("merge branch")
-        })
-        .collect()
+#[cfg(test)]
+fn filter_noise(commits: Vec<CommitData>) -> Vec<CommitData> {
+    commits.into_iter().filter(|c| !is_noise(&c.message)).collect()
 }
 
 #[cfg(test)]
@@ -190,7 +187,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_batch_commits() {
+    fn test_pack_by_count() {
         let commits: Vec<CommitData> = (0..23)
             .map(|i| CommitData {
                 sha: format!("sha{i}"),
@@ -205,7 +202,7 @@ mod tests {
             })
             .collect();
 
-        let batches = batch_commits(commits, 5);
+        let batches = crate::extract::pack(commits, 5);
         assert_eq!(batches.len(), 5); // 5+5+5+5+3
         assert_eq!(batches[0].len(), 5);
         assert_eq!(batches[4].len(), 3);
@@ -294,14 +291,14 @@ mod tests {
 
     #[test]
     fn test_batch_empty() {
-        let batches = batch_commits(vec![], 5);
+        let batches = crate::extract::pack(vec![], 5);
         assert!(batches.is_empty());
     }
 
     #[test]
     fn test_batch_single() {
         let commits = vec![make_commit("a", "one")];
-        let batches = batch_commits(commits, 5);
+        let batches = crate::extract::pack(commits, 5);
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].len(), 1);
     }
@@ -311,7 +308,7 @@ mod tests {
         let commits: Vec<_> = (0..10)
             .map(|i| make_commit(&format!("{i}"), "msg"))
             .collect();
-        let batches = batch_commits(commits, 5);
+        let batches = crate::extract::pack(commits, 5);
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].len(), 5);
         assert_eq!(batches[1].len(), 5);
