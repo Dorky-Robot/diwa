@@ -243,6 +243,12 @@ pub enum DaemonAction {
 }
 
 fn main() {
+    // Rust ignores SIGPIPE, so `println!` into a closed pipe (`diwa ls | head`)
+    // panics with "Broken pipe". Restore the default: the process just ends,
+    // quietly, as every other unix tool does.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let cli = Cli::parse();
 
     if let Err(e) = run(cli) {
