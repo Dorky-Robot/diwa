@@ -308,3 +308,57 @@ fn catch_up_reads_what_an_older_sweep_skipped_and_never_resends_what_was_read() 
     r.index(&["--catch-up-since", "2026-01-05"]);
     assert_eq!(r.sent()[9..], all[4..], "commits of Jan 5 and 6 only");
 }
+
+/// A commit pushed after the hub last fetched is found by `insight add` and
+/// `show`, which fetch origin once; a sha that is nowhere still fails, and
+/// says it fetched.
+#[test]
+fn insight_add_fetches_a_commit_the_mirror_has_not_seen() {
+    let tmp = tempfile::tempdir().unwrap();
+    let remote = tmp.path().join("remote");
+    let origin = remote.join("org/thing.git");
+    std::fs::create_dir_all(&origin).unwrap();
+    git_in(&origin, &["init", "-q", "--bare", "-b", "main"]);
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    git_in(&work, &["init", "-q", "-b", "main"]);
+    git_in(&work, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    git_in(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+    git_in(&work, &["push", "-q", "origin", "main"]);
+
+    let hub = tmp.path().join("hub");
+    let run = |args: &[&str]| {
+        local_diwa()
+            .env("DIWA_DIR", &hub)
+            .env("DIWA_GITHUB_BASE", format!("{}/", remote.display()))
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    assert!(run(&["add", "org/thing", "--no-index"]).status.success());
+
+    git_in(&work, &["commit", "-q", "--allow-empty", "-m", "second"]);
+    git_in(&work, &["push", "-q", "origin", "main"]);
+    let sha = git_in(&work, &["rev-parse", "HEAD"]);
+
+    let out = run(&["insight", "add", "org/thing", &sha[..9], "Late", "--body", "why"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let shown = run(&["show", "org/thing", &sha[..9], "-n", "0"]);
+    assert!(String::from_utf8_lossy(&shown.stdout).contains("Late"));
+
+    let out = run(&["insight", "add", "org/thing", "deadbeef1", "Nope"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("fetched origin"));
+}
+
+/// Output into a closed pipe ends the process quietly instead of panicking.
+#[test]
+fn a_closed_pipe_is_not_a_panic() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(format!("DIWA_REMOTE=local DIWA_DIR={} {} --help | true", tmp.path().display(), diwa_bin().display()))
+        .output()
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("panicked"));
+}
