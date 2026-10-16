@@ -46,6 +46,28 @@ fn repo_path(diwa: &Path, slug: &str) -> Option<PathBuf> {
     manifest::read_manifest(diwa).get(slug).cloned().filter(|p| p.exists())
 }
 
+/// Resolve `rev` in the repo at `path`. When it is not there and the repo is a
+/// hub mirror, fetch origin once (the daemon's own fetch, under the same lock)
+/// and look again: the daemon only polls every 10 minutes, so a commit pushed
+/// a moment ago is on GitHub but not yet here. Returns the commit and a note
+/// saying what the fetch did, for the error or the output.
+fn resolve_or_fetch(path: &Path, rev: &str) -> (Option<git::CommitRef>, Option<String>) {
+    if let Some(c) = git::resolve_commit(path, rev) {
+        return (Some(c), None);
+    }
+    let looks_like_sha = (4..=40).contains(&rev.len()) && rev.chars().all(|c| c.is_ascii_hexdigit());
+    if !looks_like_sha || !path.extension().is_some_and(|e| e == "git") {
+        return (None, None);
+    }
+    match crate::mirror::fetch(path) {
+        Ok(()) => {
+            let c = git::resolve_commit(path, rev);
+            (c, Some("fetched origin just now".to_string()))
+        }
+        Err(e) => (None, Some(format!("tried to fetch origin and could not: {e:#}"))),
+    }
+}
+
 /// `--body -` reads the body from stdin, so long text needs no shell quoting.
 fn read_body(body: Option<String>) -> Result<Option<String>> {
     match body.as_deref() {
@@ -86,8 +108,14 @@ pub fn add(diwa: &Path, slug: &str, a: AddArgs) -> Result<()> {
     }
     // The commit must be real: from git when the repo is here, else from the index.
     let (sha, date) = if let Some(path) = repo_path(diwa, slug) {
-        let c = git::resolve_commit(&path, &a.sha)
-            .with_context(|| format!("{} has no commit {}", display(slug), a.sha))?;
+        let (c, note) = resolve_or_fetch(&path, &a.sha);
+        let c = c.with_context(|| match &note {
+            Some(n) => format!("{} has no commit {} ({n}; it is not on origin either)", display(slug), a.sha),
+            None => format!("{} has no commit {}", display(slug), a.sha),
+        })?;
+        if note.is_some() {
+            eprintln!("diwa: {} was not in the mirror; fetched origin and found it", short(&c.sha, 7));
+        }
         (c.sha, c.date)
     } else {
         let db = IndexDb::open(diwa, slug)?;
@@ -263,12 +291,19 @@ fn related(diwa: &Path, query: &[f32], slug: &str, sha: &str, n: usize) -> Resul
 
 pub fn show(diwa: &Path, slug: &str, rev: &str, n: usize, json: bool) -> Result<()> {
     let db = IndexDb::open(diwa, slug)?;
-    let commit = repo_path(diwa, slug).and_then(|p| git::resolve_commit(&p, rev));
+    let (commit, fetch_note) = match repo_path(diwa, slug) {
+        Some(p) => resolve_or_fetch(&p, rev),
+        None => (None, None),
+    };
     let insights = db.insights_for_commit(commit.as_ref().map(|c| c.sha.as_str()).unwrap_or(rev))?;
     let (sha, date, subject) = match (&commit, insights.first()) {
         (Some(c), _) => (c.sha.clone(), c.date.clone(), c.subject.clone()),
         (None, Some(i)) => (i.commit_sha.clone(), i.commit_date.clone(), String::new()),
-        (None, None) => bail!("{} has no commit {rev} that diwa knows of", display(slug)),
+        (None, None) => bail!(
+            "{} has no commit {rev} that diwa knows of{}",
+            display(slug),
+            fetch_note.map(|n| format!(" ({n})")).unwrap_or_default()
+        ),
     };
 
     // Related: the meaning of this commit's insights, or of its message when it has none.
