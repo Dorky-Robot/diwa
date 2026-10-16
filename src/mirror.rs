@@ -37,7 +37,13 @@ pub fn mirror_path(diwa_dir: &Path, owner: &str, name: &str) -> PathBuf {
 
 /// Bring a bare mirror up to date with origin. Force-updates branches so a
 /// rebase upstream follows (staleness.rs reports the Detached case).
+///
+/// Fetches into one mirror are serialized by an exclusive lock on a file in
+/// the mirror (`diwa-fetch.lock`), so the daemon's sweep and a command that
+/// fetches on demand never run `git fetch` in the same repo at once. The lock
+/// is released when the file closes, even if this process dies.
 pub fn fetch(path: &Path) -> Result<()> {
+    let _lock = FetchLock::take(path)?;
     let out = Command::new("git")
         .arg("-C")
         .arg(path)
@@ -52,6 +58,24 @@ pub fn fetch(path: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+struct FetchLock(std::fs::File);
+
+impl FetchLock {
+    fn take(mirror: &Path) -> Result<Self> {
+        use std::os::unix::io::AsRawFd;
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(mirror.join("diwa-fetch.lock"))
+            .with_context(|| format!("opening the fetch lock in {}", mirror.display()))?;
+        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            bail!("could not lock {}: {}", mirror.display(), std::io::Error::last_os_error());
+        }
+        Ok(FetchLock(f))
+    }
 }
 
 /// Clone `org/name` bare if it is not there yet, otherwise fetch. Returns the mirror path.
