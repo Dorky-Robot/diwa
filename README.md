@@ -139,6 +139,8 @@ diwa insight edit 5d0b8ddf --title "..."  # any unique start of an id; works on 
 diwa insight rm 9a3759f8
 ```
 
+On a hub, `insight add` and `show` handle a commit pushed minutes ago: if the sha is not in the mirror they fetch origin once (under the same lock as the daemon's sweep) and look again, remote mode included.
+
 `--body -` reads the body from stdin. An edit or removal of an extracted insight is kept as an override, so `diwa reindex` extracts the commit again and then applies it; manual insights are restored after a reindex. All of this lives in the index (`curations` table), so back the index up.
 
 `diwa show <repo> <sha>` lists each insight with how it came to be (extracted, edited, reflection, manual) and then the nearest insights from every indexed repo, with repo and sha, so the next `diwa show` is one copy-paste away.
