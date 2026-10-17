@@ -138,7 +138,9 @@ pub fn run(r: &Remote, args: &[String], stdin: bool) -> Result<i32> {
         .status()
         .context("failed to run ssh")?;
     let code = status.code().unwrap_or(1);
-    if code == SSH_FAILED {
+    // ssh also exits 255 when our stdout closed early (`diwa ls | head`), so
+    // only blame the host if a probe fails too.
+    if code == SSH_FAILED && probe(r).is_err() {
         unreachable_hint(r);
     }
     Ok(code)
