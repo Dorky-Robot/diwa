@@ -85,6 +85,19 @@ fn env_or(key: &str, default: &str) -> String {
     }
 }
 
+/// Why a `claude -p` call failed, short enough for one log line. `claude`
+/// reports an expired login on stdout, inside the JSON envelope's `result`;
+/// the first 300 characters of that envelope are only usage counters, which
+/// hid the reason for a week on the hub. So the result comes first.
+fn failure_reason(stderr: &str, stdout: &str) -> String {
+    let stdout = stdout.trim();
+    let result = serde_json::from_str::<serde_json::Value>(stdout)
+        .ok()
+        .and_then(|v| v.get("result").and_then(|r| r.as_str()).map(String::from));
+    let detail = result.unwrap_or_else(|| stdout.chars().take(300).collect());
+    [stderr.trim(), detail.trim()].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join(" ")
+}
+
 /// Send a prompt to `claude -p` and return the response text.
 pub fn prompt(text: &str) -> Result<String> {
     let model = env_or("DIWA_MODEL", DEFAULT_MODEL);
@@ -150,12 +163,9 @@ pub fn prompt(text: &str) -> Result<String> {
     let stderr = err_reader.join().unwrap_or_default();
 
     if !status.success() {
-        // `claude -p` reports e.g. an expired login on stdout, not stderr.
-        let out = String::from_utf8_lossy(&stdout);
         anyhow::bail!(
-            "claude exited with error: {} {}",
-            String::from_utf8_lossy(&stderr).trim(),
-            out.trim().chars().take(300).collect::<String>()
+            "claude exited with error: {}",
+            failure_reason(&String::from_utf8_lossy(&stderr), &String::from_utf8_lossy(&stdout))
         );
     }
 
@@ -375,6 +385,14 @@ mod envelope_tests {
         assert_eq!(e.text, "[]");
         assert!(!e.is_error);
         assert_eq!((e.input_tokens, e.output_tokens), (1990, 14));
+    }
+
+    #[test]
+    fn failure_reason_puts_the_envelope_result_first() {
+        let out = r#"{"duration_api_ms":0,"stop_reason":"stop_sequence","usage":{"input_tokens":0,"output_tokens":0,"server_tool_use":{"web_search_requests":0}},"padding":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","is_error":true,"result":"Failed to authenticate: OAuth session expired and could not be refreshed"}"#;
+        assert_eq!(failure_reason("", out), "Failed to authenticate: OAuth session expired and could not be refreshed");
+        assert_eq!(failure_reason(" boom \n", "plain words"), "boom plain words");
+        assert_eq!(failure_reason("", ""), "");
     }
 
     #[test]
