@@ -362,3 +362,61 @@ fn a_closed_pipe_is_not_a_panic() {
         .unwrap();
     assert!(!String::from_utf8_lossy(&out.stderr).contains("panicked"));
 }
+
+// ---- the hub's long-lived login: <diwa dir>/claude-token goes to claude, nowhere else ----
+
+/// Runs `diwa index` with a fake `claude` that writes what it sees in
+/// CLAUDE_CODE_OAUTH_TOKEN, and returns (success, that value, stderr).
+fn index_seeing_token(token_file: Option<(&str, u32)>) -> (bool, String, String) {
+    let r = repo_with(1, "x");
+    let seen = r.tmp.path().join("seen.txt");
+    let fake = r.tmp.path().join("bin").join("claude");
+    std::fs::write(
+        &fake,
+        format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' \"${{CLAUDE_CODE_OAUTH_TOKEN-unset}}\" > '{}'\necho '[]'\n", seen.display()),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    if let Some((body, mode)) = token_file {
+        std::fs::create_dir_all(&r.home).unwrap();
+        let f = r.home.join("claude-token");
+        std::fs::write(&f, body).unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    let out = local_diwa()
+        .args(["index", r.repo.to_str().unwrap()])
+        .env("DIWA_DIR", &r.home)
+        .env("PATH", &r.path)
+        .env("GH_TOKEN", "")
+        .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
+        .env_remove("DIWA_CLAUDE_TOKEN_FILE")
+        .output()
+        .unwrap();
+    (
+        out.status.success(),
+        std::fs::read_to_string(&seen).unwrap_or_default(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn token_file_reaches_claude_as_its_oauth_token() {
+    let (ok, seen, err) = index_seeing_token(Some(("  sk-ant-oat-test\n", 0o600)));
+    assert!(ok, "{err}");
+    assert_eq!(seen, "sk-ant-oat-test");
+}
+
+#[test]
+fn no_token_file_leaves_claude_to_its_own_login() {
+    let (ok, seen, err) = index_seeing_token(None);
+    assert!(ok, "{err}");
+    assert_eq!(seen, "unset");
+}
+
+#[test]
+fn a_token_file_others_can_read_stops_indexing_instead_of_being_used() {
+    let (ok, seen, err) = index_seeing_token(Some(("sk-ant-oat-test", 0o644)));
+    assert!(!ok);
+    assert_eq!(seen, "", "claude must not run");
+    assert!(err.contains("chmod 600") && err.contains("without advancing the watermark"), "{err}");
+}

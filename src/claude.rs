@@ -85,6 +85,47 @@ fn env_or(key: &str, default: &str) -> String {
     }
 }
 
+/// Where a long-lived login for `claude` lives: `DIWA_CLAUDE_TOKEN_FILE`, else
+/// `<diwa dir>/claude-token`. Under launchd `claude` reads its login from the
+/// keychain, a second copy beside `~/.claude/.credentials.json` that ssh
+/// sessions use. On 2026-10-23 the hub's keychain copy expired and could not
+/// refresh while the file stayed fresh, so every sweep failed for a week.
+/// A token from `claude setup-token` in this file is handed to the child as
+/// `CLAUDE_CODE_OAUTH_TOKEN` and depends on neither copy.
+fn token_file() -> Option<PathBuf> {
+    if let Some(f) = std::env::var_os("DIWA_CLAUDE_TOKEN_FILE").filter(|f| !f.is_empty()) {
+        return Some(PathBuf::from(f));
+    }
+    let base = match std::env::var_os("DIWA_DIR") {
+        Some(d) => PathBuf::from(d),
+        None => PathBuf::from(std::env::var_os("HOME")?).join(".diwa"),
+    };
+    Some(base.join("claude-token"))
+}
+
+/// The token in `path`, trimmed; `None` when there is no file or it is empty.
+/// A file other users can read is refused rather than used: it holds a login
+/// to Felix's Max plan.
+fn read_token(path: &Option<PathBuf>) -> Result<Option<String>> {
+    let Some(path) = path else { return Ok(None) };
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
+    };
+    use std::os::unix::fs::PermissionsExt;
+    if meta.permissions().mode() & 0o077 != 0 {
+        anyhow::bail!(
+            "{} is readable by other users; run `chmod 600 {}` (the token is not used until then)",
+            path.display(),
+            path.display()
+        );
+    }
+    let token = std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let token = token.trim();
+    Ok((!token.is_empty()).then(|| token.to_string()))
+}
+
 /// Why a `claude -p` call failed, short enough for one log line. `claude`
 /// reports an expired login on stdout, inside the JSON envelope's `result`;
 /// the first 300 characters of that envelope are only usage counters, which
@@ -114,6 +155,9 @@ pub fn prompt(text: &str) -> Result<String> {
     }
     if effort == "off" {
         cmd.env("MAX_THINKING_TOKENS", "0");
+    }
+    if let Some(token) = read_token(&token_file())? {
+        cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token);
     }
     let mut child = cmd
         .args(build_args(&model, &effort))
@@ -393,6 +437,24 @@ mod envelope_tests {
         assert_eq!(failure_reason("", out), "Failed to authenticate: OAuth session expired and could not be refreshed");
         assert_eq!(failure_reason(" boom \n", "plain words"), "boom plain words");
         assert_eq!(failure_reason("", ""), "");
+    }
+
+    #[test]
+    fn token_file_is_trimmed_absent_or_refused_when_others_can_read_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let f = dir.path().join("claude-token");
+        assert_eq!(read_token(&Some(f.clone())).unwrap(), None);
+        assert_eq!(read_token(&None).unwrap(), None);
+        std::fs::write(&f, "  tok-123\n").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(read_token(&Some(f.clone())).unwrap().as_deref(), Some("tok-123"));
+        std::fs::write(&f, "\n").unwrap();
+        assert_eq!(read_token(&Some(f.clone())).unwrap(), None);
+        std::fs::write(&f, "tok-123").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let err = read_token(&Some(f)).unwrap_err().to_string();
+        assert!(err.contains("chmod 600"), "{err}");
     }
 
     #[test]
